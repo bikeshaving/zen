@@ -434,11 +434,10 @@ export class Database extends EventTarget {
 	}
 
 	async #getCurrentVersionLocked(): Promise<number> {
-		// SQLite: BEGIN IMMEDIATE already holds write lock
-		// PostgreSQL/MySQL: Use FOR UPDATE to lock rows
-		const forUpdate = this.#dialect === "sqlite" ? "" : " FOR UPDATE";
+		// Locking is handled by withMigrationLock() (advisory locks) or
+		// the transaction wrapper (BEGIN IMMEDIATE for SQLite, or transaction for others)
 		const row = await this.#driver.get<{version: number}>(
-			`SELECT MAX(version) as version FROM _migrations${forUpdate}`,
+			`SELECT MAX(version) as version FROM _migrations`,
 			[],
 		);
 		return row?.version ?? 0;

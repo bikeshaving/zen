@@ -47,6 +47,9 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 		async val<T>(sql: string, params: unknown[]): Promise<T> {
 			return 0 as T;
 		},
+		escapeIdentifier(name: string): string {
+			return `"${name.replace(/"/g, '""')}"`;
+		},
 	};
 }
 
