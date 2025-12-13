@@ -58,6 +58,7 @@ export {
 	where,
 	set,
 	on,
+	values,
 	type ConditionOperators,
 	type ConditionValue,
 	type WhereConditions,

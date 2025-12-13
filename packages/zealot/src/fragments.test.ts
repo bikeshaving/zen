@@ -2,7 +2,7 @@ import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, primary, references} from "./table.js";
 import {parseTemplate} from "./query.js";
-import {where, set, on} from "./fragments.js";
+import {where, set, on, values} from "./fragments.js";
 
 // Test tables (Uppercase plural convention)
 const Users = table("users", {
@@ -166,6 +166,92 @@ describe("on()", () => {
 		expect(() => on(Posts, "title")).toThrow(
 			'Field "title" is not a foreign key reference in table "posts"',
 		);
+	});
+});
+
+describe("values()", () => {
+	const uuid1 = "550e8400-e29b-41d4-a716-446655440001";
+	const uuid2 = "550e8400-e29b-41d4-a716-446655440002";
+	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
+
+	test("single row with specified columns", () => {
+		const fragment = values(Posts, [{id: uuid1, title: "Hello"}], ["id", "title"]);
+		expect(fragment.sql).toBe("(?, ?)");
+		expect(fragment.params).toEqual([uuid1, "Hello"]);
+	});
+
+	test("multiple rows", () => {
+		const rows = [
+			{id: uuid1, title: "First"},
+			{id: uuid2, title: "Second"},
+			{id: uuid3, title: "Third"},
+		];
+		const fragment = values(Posts, rows, ["id", "title"]);
+		expect(fragment.sql).toBe("(?, ?), (?, ?), (?, ?)");
+		expect(fragment.params).toEqual([uuid1, "First", uuid2, "Second", uuid3, "Third"]);
+	});
+
+	test("respects column order", () => {
+		const fragment = values(Posts, [{id: uuid1, title: "Hello"}], ["title", "id"]);
+		expect(fragment.sql).toBe("(?, ?)");
+		expect(fragment.params).toEqual(["Hello", uuid1]);
+	});
+
+	test("validates rows against schema", () => {
+		// viewCount must be an integer
+		expect(() =>
+			values(Posts, [{id: uuid1, viewCount: "not a number"}] as any, ["id", "viewCount"]),
+		).toThrow();
+	});
+
+	test("throws on empty rows", () => {
+		expect(() => values(Posts, [], ["id", "title"])).toThrow(
+			"values() requires at least one row",
+		);
+	});
+
+	test("throws on empty columns", () => {
+		expect(() => values(Posts, [{id: uuid1}], [])).toThrow(
+			"values() requires at least one column",
+		);
+	});
+
+	test("works in INSERT template", () => {
+		const rows = [
+			{id: uuid1, title: "First", published: true},
+			{id: uuid2, title: "Second", published: false},
+		];
+		const strings = [
+			"INSERT INTO posts (id, title, published) VALUES ",
+			"",
+		] as unknown as TemplateStringsArray;
+		const {sql, params} = parseTemplate(
+			strings,
+			[values(Posts, rows, ["id", "title", "published"])],
+			"sqlite",
+		);
+
+		expect(sql).toBe("INSERT INTO posts (id, title, published) VALUES (?, ?, ?), (?, ?, ?)");
+		expect(params).toEqual([uuid1, "First", true, uuid2, "Second", false]);
+	});
+
+	test("postgresql placeholders", () => {
+		const rows = [
+			{id: uuid1, title: "First"},
+			{id: uuid2, title: "Second"},
+		];
+		const strings = [
+			"INSERT INTO posts (id, title) VALUES ",
+			"",
+		] as unknown as TemplateStringsArray;
+		const {sql, params} = parseTemplate(
+			strings,
+			[values(Posts, rows, ["id", "title"])],
+			"postgresql",
+		);
+
+		expect(sql).toBe("INSERT INTO posts (id, title) VALUES ($1, $2), ($3, $4)");
+		expect(params).toEqual([uuid1, "First", uuid2, "Second"]);
 	});
 });
 

@@ -245,3 +245,48 @@ export function on<T extends Table<any>>(
 
 	return createFragment(`${refColumn} = ${fkColumn}`, []);
 }
+
+/**
+ * Generate value tuples fragment for INSERT statements.
+ *
+ * Each row is validated against the table schema. The columns array
+ * determines the order of values and must match the SQL column list.
+ *
+ * @example
+ * db.exec`
+ *   INSERT INTO posts (id, title, published)
+ *   VALUES ${values(Posts, rows, ["id", "title", "published"])}
+ * `
+ * // Output: (?, ?, ?), (?, ?, ?)
+ */
+export function values<T extends Table<any>>(
+	table: T,
+	rows: Partial<Infer<T>>[],
+	columns: (keyof Infer<T> & string)[],
+): SQLFragment {
+	if (rows.length === 0) {
+		throw new Error("values() requires at least one row");
+	}
+
+	if (columns.length === 0) {
+		throw new Error("values() requires at least one column");
+	}
+
+	const partialSchema = table.schema.partial();
+	const params: unknown[] = [];
+	const tuples: string[] = [];
+
+	for (const row of rows) {
+		const validated = partialSchema.parse(row);
+		const rowPlaceholders: string[] = [];
+
+		for (const col of columns) {
+			rowPlaceholders.push("?");
+			params.push(validated[col]);
+		}
+
+		tuples.push(`(${rowPlaceholders.join(", ")})`);
+	}
+
+	return createFragment(tuples.join(", "), params);
+}
