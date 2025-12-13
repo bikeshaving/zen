@@ -71,17 +71,17 @@ export function validateWithStandardSchema<T = unknown>(
 // ============================================================================
 
 /**
- * Namespace for Zealot metadata to avoid collisions with user metadata.
+ * Namespace for database metadata to avoid collisions with user metadata.
  */
-const ZEALOT_META_NAMESPACE = "zealot" as const;
+const DB_META_NAMESPACE = "db" as const;
 
 /**
- * Helper to safely get Zealot metadata from a schema.
+ * Helper to safely get database metadata from a schema.
  */
-function getZealotMeta(schema: ZodTypeAny): Record<string, any> {
+function getDbMeta(schema: ZodTypeAny): Record<string, any> {
 	try {
 		const meta = typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
-		return meta?.[ZEALOT_META_NAMESPACE] ?? {};
+		return meta?.[DB_META_NAMESPACE] ?? {};
 	} catch {
 		// Fallback to empty object if .meta() fails
 		return {};
@@ -89,18 +89,18 @@ function getZealotMeta(schema: ZodTypeAny): Record<string, any> {
 }
 
 /**
- * Helper to set Zealot metadata on a schema, preserving user metadata.
+ * Helper to set database metadata on a schema, preserving user metadata.
  */
-function setZealotMeta<T extends ZodTypeAny>(
+function setDbMeta<T extends ZodTypeAny>(
 	schema: T,
-	zealotMeta: Record<string, any>,
+	dbMeta: Record<string, any>,
 ): T {
 	const existing = (typeof (schema as any).meta === "function" ? (schema as any).meta() : undefined) ?? {};
 	return schema.meta({
 		...existing,
-		[ZEALOT_META_NAMESPACE]: {
-			...(existing[ZEALOT_META_NAMESPACE] ?? {}),
-			...zealotMeta,
+		[DB_META_NAMESPACE]: {
+			...(existing[DB_META_NAMESPACE] ?? {}),
+			...dbMeta,
 		},
 	}) as T;
 }
@@ -133,7 +133,7 @@ export interface FieldDbMeta {
  * id: primary(z.string().uuid())
  */
 export function primary<T extends ZodTypeAny>(schema: T): T {
-	return setZealotMeta(schema, {primary: true});
+	return setDbMeta(schema, {primary: true});
 }
 
 /**
@@ -143,7 +143,7 @@ export function primary<T extends ZodTypeAny>(schema: T): T {
  * email: unique(z.string().email())
  */
 export function unique<T extends ZodTypeAny>(schema: T): T {
-	return setZealotMeta(schema, {unique: true});
+	return setDbMeta(schema, {unique: true});
 }
 
 /**
@@ -153,7 +153,7 @@ export function unique<T extends ZodTypeAny>(schema: T): T {
  * createdAt: index(z.date())
  */
 export function index<T extends ZodTypeAny>(schema: T): T {
-	return setZealotMeta(schema, {indexed: true});
+	return setDbMeta(schema, {indexed: true});
 }
 
 /**
@@ -164,7 +164,7 @@ export function index<T extends ZodTypeAny>(schema: T): T {
  * deletedAt: softDelete(z.date().nullable())
  */
 export function softDelete<T extends ZodTypeAny>(schema: T): T {
-	return setZealotMeta(schema, {softDelete: true});
+	return setDbMeta(schema, {softDelete: true});
 }
 
 /**
@@ -183,7 +183,7 @@ export function references<T extends ZodTypeAny>(
 		onDelete?: "cascade" | "set null" | "restrict";
 	},
 ): T {
-	return setZealotMeta(schema, {
+	return setDbMeta(schema, {
 		reference: {
 			table,
 			field: options.field,
@@ -532,11 +532,11 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		const fieldSchema = value as ZodTypeAny;
 		zodShape[key] = fieldSchema;
 
-		// Read Zealot metadata from namespaced .meta()
-		const zealotMeta = getZealotMeta(fieldSchema);
+		// Read database metadata from namespaced .meta()
+		const fieldDbMeta = getDbMeta(fieldSchema);
 		const dbMeta: FieldDbMeta = {};
 
-		if (zealotMeta.primary) {
+		if (fieldDbMeta.primary) {
 			if (meta.primary !== null) {
 				throw new TableDefinitionError(
 					`Table "${name}" has multiple primary keys: "${meta.primary}" and "${key}". Only one primary key is allowed.`,
@@ -546,15 +546,15 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			meta.primary = key;
 			dbMeta.primaryKey = true;
 		}
-		if (zealotMeta.unique) {
+		if (fieldDbMeta.unique) {
 			meta.unique.push(key);
 			dbMeta.unique = true;
 		}
-		if (zealotMeta.indexed) {
+		if (fieldDbMeta.indexed) {
 			meta.indexed.push(key);
 			dbMeta.indexed = true;
 		}
-		if (zealotMeta.softDelete) {
+		if (fieldDbMeta.softDelete) {
 			if (meta.softDeleteField !== null) {
 				throw new TableDefinitionError(
 					`Table "${name}" has multiple soft delete fields: "${meta.softDeleteField}" and "${key}". Only one soft delete field is allowed.`,
@@ -564,8 +564,8 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			meta.softDeleteField = key;
 			dbMeta.softDelete = true;
 		}
-		if (zealotMeta.reference) {
-			const ref = zealotMeta.reference;
+		if (fieldDbMeta.reference) {
+			const ref = fieldDbMeta.reference;
 			meta.references.push({
 				fieldName: key,
 				table: ref.table,
