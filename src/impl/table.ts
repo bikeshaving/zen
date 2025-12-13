@@ -49,6 +49,7 @@ export interface FieldDbMeta {
 	primaryKey?: boolean;
 	unique?: boolean;
 	indexed?: boolean;
+	softDelete?: boolean;
 	reference?: {
 		table: Table<any>;
 		field?: string; // defaults to primary key
@@ -89,6 +90,17 @@ export function unique<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
  */
 export function index<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
 	return createWrapper(schema, {indexed: true});
+}
+
+/**
+ * Mark a field as the soft delete timestamp.
+ * Enables the Table.deleted() helper for filtering soft-deleted records.
+ *
+ * @example
+ * deletedAt: softDelete(z.date().nullable())
+ */
+export function softDelete<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
+	return createWrapper(schema, {softDelete: true});
 }
 
 /**
@@ -260,6 +272,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		primary: string | null;
 		unique: string[];
 		indexed: string[];
+		softDeleteField: string | null;
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
 		/** True if this is a partial table created via pick() */
@@ -274,6 +287,23 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 
 	/** Get all foreign key references */
 	references(): ReferenceInfo[];
+
+	/**
+	 * Generate SQL fragment to check if a row is soft-deleted.
+	 *
+	 * Returns `"table"."deleted_at" IS NOT NULL` where deleted_at is the field
+	 * marked with softDelete().
+	 *
+	 * @throws Error if table doesn't have a soft delete field
+	 *
+	 * @example
+	 * // Exclude soft-deleted records
+	 * db.all(Posts)`WHERE NOT (${Posts.deleted()}) AND published = ${true}`
+	 *
+	 * // Show only soft-deleted records
+	 * db.all(Posts)`WHERE ${Posts.deleted()}`
+	 */
+	deleted(): SQLFragment;
 
 	/**
 	 * Create a partial view of this table with only the specified fields.
@@ -394,6 +424,7 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 		primary: null as string | null,
 		unique: [] as string[],
 		indexed: [] as string[],
+		softDeleteField: null as string | null,
 		references: [] as ReferenceInfo[],
 		fields: {} as Record<string, FieldDbMeta>,
 	};
@@ -412,6 +443,12 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 			meta.fields[key] = value.meta;
 
 			if (value.meta.primaryKey) {
+				if (meta.primary !== null) {
+					throw new TableDefinitionError(
+						`Table "${name}" has multiple primary keys: "${meta.primary}" and "${key}". Only one primary key is allowed.`,
+						name,
+					);
+				}
 				meta.primary = key;
 			}
 			if (value.meta.unique) {
@@ -419,6 +456,15 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 			}
 			if (value.meta.indexed) {
 				meta.indexed.push(key);
+			}
+			if (value.meta.softDelete) {
+				if (meta.softDeleteField !== null) {
+					throw new TableDefinitionError(
+						`Table "${name}" has multiple soft delete fields: "${meta.softDeleteField}" and "${key}". Only one soft delete field is allowed.`,
+						name,
+					);
+				}
+				meta.softDeleteField = key;
 			}
 			if (value.meta.reference) {
 				const ref = value.meta.reference;
@@ -571,6 +617,7 @@ function createTableObject(
 		primary: string | null;
 		unique: string[];
 		indexed: string[];
+		softDeleteField: string | null;
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
 	},
@@ -605,6 +652,19 @@ function createTableObject(
 			return meta.references;
 		},
 
+		deleted(): SQLFragment {
+			const softDeleteField = meta.softDeleteField;
+			if (!softDeleteField) {
+				throw new Error(
+					`Table "${name}" does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
+				);
+			}
+			return createFragment(
+				`${quoteIdentifier(name)}.${quoteIdentifier(softDeleteField)} IS NOT NULL`,
+				[],
+			);
+		},
+
 		pick(...fields: any[]): PartialTable<any> {
 			const fieldSet = new Set(fields as string[]);
 
@@ -629,6 +689,10 @@ function createTableObject(
 					meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
 				unique: meta.unique.filter((f) => fieldSet.has(f)),
 				indexed: meta.indexed.filter((f) => fieldSet.has(f)),
+				softDeleteField:
+					meta.softDeleteField && fieldSet.has(meta.softDeleteField)
+						? meta.softDeleteField
+						: null,
 				references: meta.references.filter((r) => fieldSet.has(r.fieldName)),
 				fields: Object.fromEntries(
 					Object.entries(meta.fields).filter(([k]) => fieldSet.has(k)),

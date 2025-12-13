@@ -1,6 +1,6 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, references} from "./table.js";
+import {table, primary, unique, references, softDelete} from "./table.js";
 import {Database, type Driver} from "./database.js";
 
 // Test UUIDs (RFC 4122 compliant - version 4, variant 1)
@@ -424,5 +424,198 @@ describe("transaction()", () => {
 		});
 
 		expect(result).toEqual({id: USER_ID, name: "Alice"});
+	});
+});
+
+describe("Soft Delete", () => {
+	const SoftDeleteUsers = table("soft_delete_users", {
+		id: primary(z.string().uuid()),
+		email: unique(z.string().email()),
+		name: z.string(),
+		deletedAt: softDelete(z.date().nullable()),
+	});
+
+	describe("softDelete() field wrapper", () => {
+		test("marks field as soft delete field", () => {
+			expect(SoftDeleteUsers._meta.softDeleteField).toBe("deletedAt");
+		});
+
+		test("throws on multiple soft delete fields", () => {
+			expect(() =>
+				table("invalid_table", {
+					id: primary(z.string()),
+					deletedAt1: softDelete(z.date().nullable()),
+					deletedAt2: softDelete(z.date().nullable()),
+				}),
+			).toThrow(
+				'Table "invalid_table" has multiple soft delete fields: "deletedAt1" and "deletedAt2"',
+			);
+		});
+
+		test("allows tables without soft delete field", () => {
+			const NormalTable = table("normal", {
+				id: primary(z.string()),
+				name: z.string(),
+			});
+			expect(NormalTable._meta.softDeleteField).toBeNull();
+		});
+	});
+
+	describe("Table.deleted()", () => {
+		test("generates SQL fragment for soft delete check", () => {
+			const fragment = SoftDeleteUsers.deleted();
+			expect(fragment).toHaveProperty("sql");
+			expect(fragment).toHaveProperty("params");
+			expect(fragment.sql).toBe(
+				'"soft_delete_users"."deletedAt" IS NOT NULL',
+			);
+			expect(fragment.params).toEqual([]);
+		});
+
+		test("throws if table has no soft delete field", () => {
+			const NormalTable = table("normal", {
+				id: primary(z.string()),
+				name: z.string(),
+			});
+			expect(() => NormalTable.deleted()).toThrow(
+				'Table "normal" does not have a soft delete field',
+			);
+		});
+
+		test("fragment composes correctly in queries", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			(driver.all as any).mockImplementation(async () => []);
+
+			await db.all(SoftDeleteUsers)`WHERE NOT (${SoftDeleteUsers.deleted()})`;
+
+			const [sql] = (driver.all as any).mock.calls[0];
+			expect(sql).toContain('"soft_delete_users"."deletedAt" IS NOT NULL');
+		});
+	});
+
+	describe("Database.softDelete()", () => {
+		let driver: Driver;
+		let db: Database;
+
+		beforeEach(() => {
+			driver = createMockDriver();
+			db = new Database(driver);
+		});
+
+		test("soft deletes by primary key", async () => {
+			(driver.run as any).mockImplementation(async () => 1);
+
+			const deleted = await db.softDelete(SoftDeleteUsers, USER_ID);
+
+			expect(deleted).toBe(true);
+
+			const [sql, params] = (driver.run as any).mock.calls[0];
+			expect(sql).toContain('UPDATE "soft_delete_users"');
+			expect(sql).toContain('SET "deletedAt" = ?');
+			expect(sql).toContain('WHERE "id" = ?');
+			expect(params).toHaveLength(2);
+			expect(params[0]).toBe(USER_ID);
+			expect(params[1]).toBeInstanceOf(Date);
+		});
+
+		test("returns false if entity not found", async () => {
+			(driver.run as any).mockImplementation(async () => 0);
+
+			const deleted = await db.softDelete(SoftDeleteUsers, "nonexistent");
+
+			expect(deleted).toBe(false);
+		});
+
+		test("throws if table has no primary key", async () => {
+			const NoPkTable = table("no_pk", {
+				name: z.string(),
+				deletedAt: softDelete(z.date().nullable()),
+			});
+
+			await expect(db.softDelete(NoPkTable, "123")).rejects.toThrow(
+				"Table no_pk has no primary key defined",
+			);
+		});
+
+		test("throws if table has no soft delete field", async () => {
+			const NormalTable = table("normal", {
+				id: primary(z.string()),
+				name: z.string(),
+			});
+
+			await expect(db.softDelete(NormalTable, "123")).rejects.toThrow(
+				'Table normal does not have a soft delete field',
+			);
+		});
+	});
+
+	describe("Transaction.softDelete()", () => {
+		test("soft deletes within transaction", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			(driver.run as any).mockImplementation(async () => 1);
+
+			const result = await db.transaction(async (tx) => {
+				const deleted = await tx.softDelete(SoftDeleteUsers, USER_ID);
+				return deleted;
+			});
+
+			expect(result).toBe(true);
+
+			// Check transaction was called
+			expect((driver.transaction as any).mock.calls.length).toBe(1);
+
+			// Check UPDATE was called
+			const [sql, params] = (driver.run as any).mock.calls[0];
+			expect(sql).toContain('UPDATE "soft_delete_users"');
+			expect(sql).toContain('SET "deletedAt" = ?');
+			expect(sql).toContain('WHERE "id" = ?');
+			expect(params).toHaveLength(2);
+			expect(params[0]).toBe(USER_ID);
+			expect(params[1]).toBeInstanceOf(Date);
+		});
+
+		test("throws if table has no soft delete field", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			const NormalTable = table("normal", {
+				id: primary(z.string()),
+				name: z.string(),
+			});
+
+			await expect(
+				db.transaction(async (tx) => {
+					await tx.softDelete(NormalTable, "123");
+				}),
+			).rejects.toThrow('Table normal does not have a soft delete field');
+		});
+	});
+
+	describe("Integration with pick()", () => {
+		test("preserves soft delete field in partial table", () => {
+			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
+			expect(PartialUsers._meta.softDeleteField).toBe("deletedAt");
+		});
+
+		test("removes soft delete field when not picked", () => {
+			const PartialUsers = SoftDeleteUsers.pick("id", "name");
+			expect(PartialUsers._meta.softDeleteField).toBeNull();
+		});
+
+		test("deleted() works on partial table with soft delete field", () => {
+			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
+			const fragment = PartialUsers.deleted();
+			expect(fragment.sql).toBe(
+				'"soft_delete_users"."deletedAt" IS NOT NULL',
+			);
+		});
+
+		test("deleted() throws on partial table without soft delete field", () => {
+			const PartialUsers = SoftDeleteUsers.pick("id", "name");
+			expect(() => PartialUsers.deleted()).toThrow(
+				'Table "soft_delete_users" does not have a soft delete field',
+			);
+		});
 	});
 });

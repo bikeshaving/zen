@@ -297,6 +297,32 @@ export class Transaction {
 		return affected > 0;
 	}
 
+	async softDelete<T extends Table<any>>(
+		table: T,
+		id: string | number | Record<string, unknown>,
+	): Promise<boolean> {
+		const pk = table.primaryKey();
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table._meta.softDeleteField;
+		if (!softDeleteField) {
+			throw new Error(
+				`Table ${table.name} does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
+			);
+		}
+
+		const tableName = this.#quoteIdent(table.name);
+		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+		const setClause = `${this.#quoteIdent(softDeleteField)} = ${this.#placeholder(2)}`;
+
+		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
+		const affected = await this.#driver.run(sql, [id, new Date()]);
+
+		return affected > 0;
+	}
+
 	// ==========================================================================
 	// Raw - No Normalization
 	// ==========================================================================
@@ -694,6 +720,38 @@ export class Database extends EventTarget {
 
 		const sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
 		const affected = await this.#driver.run(sql, [id]);
+
+		return affected > 0;
+	}
+
+	/**
+	 * Soft delete by marking the soft delete field (e.g., deletedAt) with the current timestamp.
+	 *
+	 * @example
+	 * const deleted = await db.softDelete(Users, userId);
+	 */
+	async softDelete<T extends Table<any>>(
+		table: T,
+		id: string | number | Record<string, unknown>,
+	): Promise<boolean> {
+		const pk = table.primaryKey();
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table._meta.softDeleteField;
+		if (!softDeleteField) {
+			throw new Error(
+				`Table ${table.name} does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
+			);
+		}
+
+		const tableName = this.#quoteIdent(table.name);
+		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+		const setClause = `${this.#quoteIdent(softDeleteField)} = ${this.#placeholder(2)}`;
+
+		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
+		const affected = await this.#driver.run(sql, [id, new Date()]);
 
 		return affected > 0;
 	}

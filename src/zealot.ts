@@ -19,6 +19,7 @@ export {
 	unique,
 	index,
 	references,
+	softDelete,
 
 	// Field metadata
 	type FieldMeta,
