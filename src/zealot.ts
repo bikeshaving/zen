@@ -34,21 +34,21 @@ export {
 	type ConditionValue,
 	type WhereConditions,
 	type SetValues,
-} from "./table.js";
+} from "./impl/table.js";
 
 export {
 	// DDL generation
 	generateDDL,
 	ddl,
 	type DDLOptions,
-} from "./ddl.js";
+} from "./impl/ddl.js";
 
 export {
 	// SQL dialect
 	type SQLDialect,
 	// SQL fragments
 	type SQLFragment,
-} from "./query.js";
+} from "./impl/query.js";
 
 export {
 	// Database wrapper
@@ -60,7 +60,7 @@ export {
 	type TransactionDriver,
 	type DatabaseOptions,
 	type TaggedQuery,
-} from "./database.js";
+} from "./impl/database.js";
 
 export {
 	// Errors
@@ -78,4 +78,4 @@ export {
 	isZealotError,
 	hasErrorCode,
 	type ZealotErrorCode,
-} from "./errors.js";
+} from "./impl/errors.js";

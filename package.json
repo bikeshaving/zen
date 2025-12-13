@@ -5,8 +5,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
+      "types": "./dist/src/zealot.d.ts",
+      "import": "./dist/src/zealot.js"
     },
     "./bun": {
       "types": "./dist/src/bun.d.ts",
@@ -28,73 +28,25 @@
       "types": "./dist/src/bun.d.ts",
       "import": "./dist/src/bun.js"
     },
-    "./database": {
-      "types": "./dist/src/database.d.ts",
-      "import": "./dist/src/database.js"
-    },
-    "./database.js": {
-      "types": "./dist/src/database.d.ts",
-      "import": "./dist/src/database.js"
-    },
-    "./ddl": {
-      "types": "./dist/src/ddl.d.ts",
-      "import": "./dist/src/ddl.js"
-    },
-    "./ddl.js": {
-      "types": "./dist/src/ddl.d.ts",
-      "import": "./dist/src/ddl.js"
-    },
-    "./errors": {
-      "types": "./dist/src/errors.d.ts",
-      "import": "./dist/src/errors.js"
-    },
-    "./errors.js": {
-      "types": "./dist/src/errors.d.ts",
-      "import": "./dist/src/errors.js"
-    },
-    "./index": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
-    },
-    "./index.js": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
-    },
     "./mysql.js": {
       "types": "./dist/src/mysql.d.ts",
       "import": "./dist/src/mysql.js"
-    },
-    "./normalize": {
-      "types": "./dist/src/normalize.d.ts",
-      "import": "./dist/src/normalize.js"
-    },
-    "./normalize.js": {
-      "types": "./dist/src/normalize.d.ts",
-      "import": "./dist/src/normalize.js"
     },
     "./postgres.js": {
       "types": "./dist/src/postgres.d.ts",
       "import": "./dist/src/postgres.js"
     },
-    "./query": {
-      "types": "./dist/src/query.d.ts",
-      "import": "./dist/src/query.js"
-    },
-    "./query.js": {
-      "types": "./dist/src/query.d.ts",
-      "import": "./dist/src/query.js"
-    },
     "./sqlite.js": {
       "types": "./dist/src/sqlite.d.ts",
       "import": "./dist/src/sqlite.js"
     },
-    "./table": {
-      "types": "./dist/src/table.d.ts",
-      "import": "./dist/src/table.js"
+    "./zealot": {
+      "types": "./dist/src/zealot.d.ts",
+      "import": "./dist/src/zealot.js"
     },
-    "./table.js": {
-      "types": "./dist/src/table.d.ts",
-      "import": "./dist/src/table.js"
+    "./zealot.js": {
+      "types": "./dist/src/zealot.d.ts",
+      "import": "./dist/src/zealot.js"
     },
     "./package.json": "./dist/package.json"
   },
@@ -151,6 +103,6 @@
     "mysql"
   ],
   "license": "MIT",
-  "module": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts"
+  "module": "./dist/src/zealot.js",
+  "types": "./dist/src/zealot.d.ts"
 }

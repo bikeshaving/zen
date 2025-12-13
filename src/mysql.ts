@@ -7,8 +7,7 @@
  * Requires: mysql2
  */
 
-import type {DatabaseAdapter, DatabaseDriver} from "./database.js";
-import type {SQLDialect} from "./query.js";
+import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "./zealot.js";
 import mysql from "mysql2/promise";
 
 export type {DatabaseAdapter};

@@ -7,8 +7,7 @@
  * Requires: better-sqlite3
  */
 
-import type {DatabaseAdapter, DatabaseDriver} from "./database.js";
-import type {SQLDialect} from "./query.js";
+import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "./zealot.js";
 import Database from "better-sqlite3";
 
 export type {DatabaseAdapter};
