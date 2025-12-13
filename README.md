@@ -6,7 +6,7 @@ A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), 
 
 ## Design Principles
 
-1. **Zod as the source of truth** — One schema defines SQL types, validation rules, and form field metadata
+1. **ZREAM (Zod Rules Everything Around Me)** — One schema defines SQL types, validation rules, and form field metadata
 2. **SQL is not hidden** — You write SQL with tagged templates; we handle parameterization and normalization
 3. **Schema-driven normalization** — Relationships are resolved from table definitions, not query shape
 4. **No codegen** — All behavior is runtime-driven; no schema files, migrations folders, CLI generators, or compile-time artifacts
