@@ -9,7 +9,7 @@ import {
 	resolveReferences,
 	normalize,
 	normalizeOne,
-} from "./normalize.js";
+} from "./query.js";
 
 // Test tables (using plain strings - normalization doesn't need UUID validation)
 const users = table("users", {

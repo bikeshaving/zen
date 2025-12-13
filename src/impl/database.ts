@@ -6,8 +6,14 @@
  */
 
 import type {Table, Infer, Insert} from "./table.js";
-import {createQuery, parseTemplate, type SQLDialect} from "./query.js";
-import {normalize, normalizeOne} from "./normalize.js";
+import {
+	createQuery,
+	parseTemplate,
+	normalize,
+	normalizeOne,
+	type SQLDialect,
+	type RawRow,
+} from "./query.js";
 
 // ============================================================================
 // Driver Interface
