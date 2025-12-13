@@ -7,6 +7,7 @@
 
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 import {TableDefinitionError} from "./errors.js";
+import {createFragment, type SQLFragment} from "./query.js";
 
 // ============================================================================
 // Wrapper Types
@@ -199,6 +200,44 @@ export interface ReferenceInfo {
 	onDelete?: "cascade" | "set null" | "restrict";
 }
 
+// ============================================================================
+// Fragment Method Types
+// ============================================================================
+
+/**
+ * Condition operators for where/having clauses.
+ */
+export type ConditionOperators<T> = {
+	$eq?: T;
+	$lt?: T;
+	$gt?: T;
+	$lte?: T;
+	$gte?: T;
+	$like?: string;
+	$in?: T[];
+	$neq?: T;
+	$isNull?: boolean;
+};
+
+/**
+ * A condition value can be a plain value (shorthand for $eq) or an operator object.
+ */
+export type ConditionValue<T> = T | ConditionOperators<T>;
+
+/**
+ * Where conditions for a table - keys must exist in table schema.
+ */
+export type WhereConditions<T extends Table<any>> = {
+	[K in keyof Infer<T>]?: ConditionValue<Infer<T>[K]>;
+};
+
+/**
+ * Set values for updates - plain values only (no operators).
+ */
+export type SetValues<T extends Table<any>> = {
+	[K in keyof Infer<T>]?: Infer<T>[K];
+};
+
 export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly [TABLE_MARKER]: true;
 	readonly name: string;
@@ -245,7 +284,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *
 	 * @example
 	 * db.all(Posts, Users)`
-	 *   JOIN ${Users} ON ${on(Posts, 'authorId')}
+	 *   JOIN ${Users} ON ${Posts.on('authorId')}
 	 *   WHERE ${Posts.cols.published} = ${true}
 	 *   ORDER BY ${Posts.cols.createdAt} DESC
 	 * `
@@ -254,6 +293,62 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly cols: {
 		[K in keyof z.infer<ZodObject<T>>]: ColumnFragment;
 	};
+
+	/**
+	 * Generate an AND-joined conditional fragment for WHERE clauses.
+	 *
+	 * Emits fully qualified column names to avoid ambiguity in JOINs.
+	 *
+	 * @example
+	 * db.all(Posts)`
+	 *   WHERE ${Posts.where({ published: true, viewCount: { $gte: 100 } })}
+	 * `
+	 * // → "posts"."published" = ? AND "posts"."viewCount" >= ?
+	 */
+	where(conditions: WhereConditions<Table<T>>): SQLFragment;
+
+	/**
+	 * Generate assignment fragment for UPDATE SET clauses.
+	 *
+	 * Column names are quoted but not table-qualified (SQL UPDATE syntax).
+	 *
+	 * @example
+	 * db.exec`
+	 *   UPDATE posts SET ${Posts.set({ title: "New Title" })} WHERE id = ${id}
+	 * `
+	 * // → "title" = ?
+	 */
+	set(values: SetValues<Table<T>>): SQLFragment;
+
+	/**
+	 * Generate foreign-key equality fragment for JOIN ON clauses.
+	 *
+	 * Emits fully qualified, quoted column names.
+	 *
+	 * @example
+	 * db.all(Posts, Users)`
+	 *   JOIN users ON ${Posts.on("authorId")}
+	 * `
+	 * // → "users"."id" = "posts"."authorId"
+	 */
+	on(field: keyof z.infer<ZodObject<T>> & string): SQLFragment;
+
+	/**
+	 * Generate value tuples fragment for INSERT statements.
+	 *
+	 * Each row is validated against the table schema. The columns array
+	 * determines the order of values and must match the SQL column list.
+	 *
+	 * @example
+	 * db.exec`
+	 *   INSERT INTO posts (id, title) VALUES ${Posts.values(rows, ["id", "title"])}
+	 * `
+	 * // → (?, ?), (?, ?)
+	 */
+	values(
+		rows: Partial<z.infer<ZodObject<T>>>[],
+		columns: (keyof z.infer<ZodObject<T>> & string)[],
+	): SQLFragment;
 }
 
 type TableShape<T> = {
@@ -345,6 +440,83 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
  */
 function quoteIdentifier(id: string): string {
 	return `"${id.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Create a fully qualified column name: "table"."column"
+ */
+function qualifiedColumn(tableName: string, fieldName: string): string {
+	return `${quoteIdentifier(tableName)}.${quoteIdentifier(fieldName)}`;
+}
+
+/**
+ * Check if a value is an operator object.
+ */
+function isOperatorObject(value: unknown): value is ConditionOperators<unknown> {
+	if (value === null || typeof value !== "object") return false;
+	const keys = Object.keys(value);
+	return keys.length > 0 && keys.every((k) => k.startsWith("$"));
+}
+
+/**
+ * Build a condition fragment for a single field.
+ */
+function buildCondition(
+	column: string,
+	value: ConditionValue<unknown>,
+): {sql: string; params: unknown[]} {
+	if (isOperatorObject(value)) {
+		const parts: string[] = [];
+		const params: unknown[] = [];
+
+		if (value.$eq !== undefined) {
+			parts.push(`${column} = ?`);
+			params.push(value.$eq);
+		}
+		if (value.$neq !== undefined) {
+			parts.push(`${column} != ?`);
+			params.push(value.$neq);
+		}
+		if (value.$lt !== undefined) {
+			parts.push(`${column} < ?`);
+			params.push(value.$lt);
+		}
+		if (value.$gt !== undefined) {
+			parts.push(`${column} > ?`);
+			params.push(value.$gt);
+		}
+		if (value.$gte !== undefined) {
+			parts.push(`${column} >= ?`);
+			params.push(value.$gte);
+		}
+		if (value.$lte !== undefined) {
+			parts.push(`${column} <= ?`);
+			params.push(value.$lte);
+		}
+		if (value.$like !== undefined) {
+			parts.push(`${column} LIKE ?`);
+			params.push(value.$like);
+		}
+		if (value.$in !== undefined && Array.isArray(value.$in)) {
+			const placeholders = value.$in.map(() => "?").join(", ");
+			parts.push(`${column} IN (${placeholders})`);
+			params.push(...value.$in);
+		}
+		if (value.$isNull !== undefined) {
+			parts.push(value.$isNull ? `${column} IS NULL` : `${column} IS NOT NULL`);
+		}
+
+		return {
+			sql: parts.join(" AND "),
+			params,
+		};
+	}
+
+	// Plain value = $eq shorthand
+	return {
+		sql: `${column} = ?`,
+		params: [value],
+	};
 }
 
 /**
@@ -460,6 +632,97 @@ function createTableObject(
 				pickedMeta,
 				pickedIndexes,
 			);
+		},
+
+		where(conditions: Record<string, unknown>): SQLFragment {
+			const entries = Object.entries(conditions);
+			if (entries.length === 0) {
+				return createFragment("1 = 1", []);
+			}
+
+			const parts: string[] = [];
+			const params: unknown[] = [];
+
+			for (const [field, value] of entries) {
+				if (value === undefined) continue;
+
+				const column = qualifiedColumn(name, field);
+				const condition = buildCondition(column, value);
+				parts.push(condition.sql);
+				params.push(...condition.params);
+			}
+
+			if (parts.length === 0) {
+				return createFragment("1 = 1", []);
+			}
+
+			return createFragment(parts.join(" AND "), params);
+		},
+
+		set(values: Record<string, unknown>): SQLFragment {
+			const entries = Object.entries(values);
+			if (entries.length === 0) {
+				throw new Error("set() requires at least one field");
+			}
+
+			const parts: string[] = [];
+			const params: unknown[] = [];
+
+			for (const [field, value] of entries) {
+				if (value === undefined) continue;
+
+				parts.push(`${quoteIdentifier(field)} = ?`);
+				params.push(value);
+			}
+
+			if (parts.length === 0) {
+				throw new Error("set() requires at least one non-undefined field");
+			}
+
+			return createFragment(parts.join(", "), params);
+		},
+
+		on(field: string): SQLFragment {
+			const ref = meta.references.find((r) => r.fieldName === field);
+
+			if (!ref) {
+				throw new Error(
+					`Field "${field}" is not a foreign key reference in table "${name}"`,
+				);
+			}
+
+			const refColumn = qualifiedColumn(ref.table.name, ref.referencedField);
+			const fkColumn = qualifiedColumn(name, field);
+
+			return createFragment(`${refColumn} = ${fkColumn}`, []);
+		},
+
+		values(rows: Record<string, unknown>[], columns: string[]): SQLFragment {
+			if (rows.length === 0) {
+				throw new Error("values() requires at least one row");
+			}
+
+			if (columns.length === 0) {
+				throw new Error("values() requires at least one column");
+			}
+
+			const partialSchema = schema.partial();
+			const params: unknown[] = [];
+			const tuples: string[] = [];
+
+			for (const row of rows) {
+				const validated = partialSchema.parse(row);
+				const rowPlaceholders: string[] = [];
+
+				for (const col of columns) {
+					rowPlaceholders.push("?");
+					params.push((validated as Record<string, unknown>)[col]);
+				}
+
+				tuples.push(`(${rowPlaceholders.join(", ")})`);
+			}
+
+			return createFragment(tuples.join(", "), params);
 		},
 	};
 }

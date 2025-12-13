@@ -27,6 +27,12 @@ export {
 	// Type inference
 	type Infer,
 	type Insert,
+
+	// Fragment method types
+	type ConditionOperators,
+	type ConditionValue,
+	type WhereConditions,
+	type SetValues,
 } from "./table.js";
 
 export {
@@ -52,18 +58,6 @@ export {
 	createFragment,
 	type SQLFragment,
 } from "./query.js";
-
-export {
-	// Fragment helpers
-	where,
-	set,
-	on,
-	values,
-	type ConditionOperators,
-	type ConditionValue,
-	type WhereConditions,
-	type SetValues,
-} from "./fragments.js";
 
 export {
 	// Normalization

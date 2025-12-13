@@ -2,7 +2,6 @@ import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, primary, references} from "./table.js";
 import {parseTemplate} from "./query.js";
-import {where, set, on, values} from "./fragments.js";
 
 // Test tables (Uppercase plural convention)
 const Users = table("users", {
@@ -21,161 +20,161 @@ const Posts = table("posts", {
 	viewCount: z.number().int().default(0),
 });
 
-describe("where()", () => {
+describe("Table.where()", () => {
 	test("simple equality with qualified column", () => {
-		const fragment = where(Posts, {published: true});
+		const fragment = Posts.where({published: true});
 		expect(fragment.sql).toBe('"posts"."published" = ?');
 		expect(fragment.params).toEqual([true]);
 	});
 
 	test("multiple conditions (AND-joined)", () => {
-		const fragment = where(Posts, {published: true, title: "Hello"});
+		const fragment = Posts.where({published: true, title: "Hello"});
 		expect(fragment.sql).toBe('"posts"."published" = ? AND "posts"."title" = ?');
 		expect(fragment.params).toEqual([true, "Hello"]);
 	});
 
 	test("qualifies field names with table", () => {
-		const fragment = where(Posts, {viewCount: 100});
+		const fragment = Posts.where({viewCount: 100});
 		expect(fragment.sql).toBe('"posts"."viewCount" = ?');
 		expect(fragment.params).toEqual([100]);
 	});
 
 	test("$eq operator", () => {
-		const fragment = where(Posts, {published: {$eq: true}});
+		const fragment = Posts.where({published: {$eq: true}});
 		expect(fragment.sql).toBe('"posts"."published" = ?');
 		expect(fragment.params).toEqual([true]);
 	});
 
 	test("$neq operator", () => {
-		const fragment = where(Users, {role: {$neq: "admin"}});
+		const fragment = Users.where({role: {$neq: "admin"}});
 		expect(fragment.sql).toBe('"users"."role" != ?');
 		expect(fragment.params).toEqual(["admin"]);
 	});
 
 	test("$lt operator", () => {
-		const fragment = where(Posts, {viewCount: {$lt: 100}});
+		const fragment = Posts.where({viewCount: {$lt: 100}});
 		expect(fragment.sql).toBe('"posts"."viewCount" < ?');
 		expect(fragment.params).toEqual([100]);
 	});
 
 	test("$gt operator", () => {
-		const fragment = where(Posts, {viewCount: {$gt: 50}});
+		const fragment = Posts.where({viewCount: {$gt: 50}});
 		expect(fragment.sql).toBe('"posts"."viewCount" > ?');
 		expect(fragment.params).toEqual([50]);
 	});
 
 	test("$lte operator", () => {
-		const fragment = where(Posts, {viewCount: {$lte: 100}});
+		const fragment = Posts.where({viewCount: {$lte: 100}});
 		expect(fragment.sql).toBe('"posts"."viewCount" <= ?');
 		expect(fragment.params).toEqual([100]);
 	});
 
 	test("$gte operator", () => {
-		const fragment = where(Posts, {viewCount: {$gte: 50}});
+		const fragment = Posts.where({viewCount: {$gte: 50}});
 		expect(fragment.sql).toBe('"posts"."viewCount" >= ?');
 		expect(fragment.params).toEqual([50]);
 	});
 
 	test("$like operator", () => {
-		const fragment = where(Posts, {title: {$like: "%hello%"}});
+		const fragment = Posts.where({title: {$like: "%hello%"}});
 		expect(fragment.sql).toBe('"posts"."title" LIKE ?');
 		expect(fragment.params).toEqual(["%hello%"]);
 	});
 
 	test("$in operator", () => {
-		const fragment = where(Users, {role: {$in: ["user", "admin"]}});
+		const fragment = Users.where({role: {$in: ["user", "admin"]}});
 		expect(fragment.sql).toBe('"users"."role" IN (?, ?)');
 		expect(fragment.params).toEqual(["user", "admin"]);
 	});
 
 	test("$isNull operator (true)", () => {
-		const fragment = where(Posts, {title: {$isNull: true}});
+		const fragment = Posts.where({title: {$isNull: true}});
 		expect(fragment.sql).toBe('"posts"."title" IS NULL');
 		expect(fragment.params).toEqual([]);
 	});
 
 	test("$isNull operator (false)", () => {
-		const fragment = where(Posts, {title: {$isNull: false}});
+		const fragment = Posts.where({title: {$isNull: false}});
 		expect(fragment.sql).toBe('"posts"."title" IS NOT NULL');
 		expect(fragment.params).toEqual([]);
 	});
 
 	test("multiple operators on same field", () => {
-		const fragment = where(Posts, {viewCount: {$gte: 10, $lte: 100}});
+		const fragment = Posts.where({viewCount: {$gte: 10, $lte: 100}});
 		expect(fragment.sql).toBe('"posts"."viewCount" >= ? AND "posts"."viewCount" <= ?');
 		expect(fragment.params).toEqual([10, 100]);
 	});
 
 	test("empty conditions returns 1 = 1", () => {
-		const fragment = where(Posts, {});
+		const fragment = Posts.where({});
 		expect(fragment.sql).toBe("1 = 1");
 		expect(fragment.params).toEqual([]);
 	});
 
 	test("skips undefined values", () => {
-		const fragment = where(Posts, {published: true, title: undefined});
+		const fragment = Posts.where({published: true, title: undefined});
 		expect(fragment.sql).toBe('"posts"."published" = ?');
 		expect(fragment.params).toEqual([true]);
 	});
 });
 
-describe("set()", () => {
+describe("Table.set()", () => {
 	test("single field with quoted name", () => {
-		const fragment = set(Posts, {title: "New Title"});
+		const fragment = Posts.set({title: "New Title"});
 		expect(fragment.sql).toBe('"title" = ?');
 		expect(fragment.params).toEqual(["New Title"]);
 	});
 
 	test("multiple fields", () => {
-		const fragment = set(Posts, {title: "New Title", published: true});
+		const fragment = Posts.set({title: "New Title", published: true});
 		expect(fragment.sql).toBe('"title" = ?, "published" = ?');
 		expect(fragment.params).toEqual(["New Title", true]);
 	});
 
 	test("quotes field names", () => {
-		const fragment = set(Posts, {viewCount: 42});
+		const fragment = Posts.set({viewCount: 42});
 		expect(fragment.sql).toBe('"viewCount" = ?');
 		expect(fragment.params).toEqual([42]);
 	});
 
 	test("skips undefined values", () => {
-		const fragment = set(Posts, {title: "New", published: undefined});
+		const fragment = Posts.set({title: "New", published: undefined});
 		expect(fragment.sql).toBe('"title" = ?');
 		expect(fragment.params).toEqual(["New"]);
 	});
 
 	test("throws on empty object", () => {
-		expect(() => set(Posts, {})).toThrow("set() requires at least one field");
+		expect(() => Posts.set({})).toThrow("set() requires at least one field");
 	});
 
 	test("throws when all values undefined", () => {
-		expect(() => set(Posts, {title: undefined})).toThrow(
+		expect(() => Posts.set({title: undefined})).toThrow(
 			"set() requires at least one non-undefined field",
 		);
 	});
 });
 
-describe("on()", () => {
+describe("Table.on()", () => {
 	test("generates FK equality with qualified names", () => {
-		const fragment = on(Posts, "authorId");
+		const fragment = Posts.on("authorId");
 		expect(fragment.sql).toBe('"users"."id" = "posts"."authorId"');
 		expect(fragment.params).toEqual([]);
 	});
 
 	test("throws for non-FK field", () => {
-		expect(() => on(Posts, "title")).toThrow(
+		expect(() => Posts.on("title")).toThrow(
 			'Field "title" is not a foreign key reference in table "posts"',
 		);
 	});
 });
 
-describe("values()", () => {
+describe("Table.values()", () => {
 	const uuid1 = "550e8400-e29b-41d4-a716-446655440001";
 	const uuid2 = "550e8400-e29b-41d4-a716-446655440002";
 	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
 
 	test("single row with specified columns", () => {
-		const fragment = values(Posts, [{id: uuid1, title: "Hello"}], ["id", "title"]);
+		const fragment = Posts.values([{id: uuid1, title: "Hello"}], ["id", "title"]);
 		expect(fragment.sql).toBe("(?, ?)");
 		expect(fragment.params).toEqual([uuid1, "Hello"]);
 	});
@@ -186,13 +185,13 @@ describe("values()", () => {
 			{id: uuid2, title: "Second"},
 			{id: uuid3, title: "Third"},
 		];
-		const fragment = values(Posts, rows, ["id", "title"]);
+		const fragment = Posts.values(rows, ["id", "title"]);
 		expect(fragment.sql).toBe("(?, ?), (?, ?), (?, ?)");
 		expect(fragment.params).toEqual([uuid1, "First", uuid2, "Second", uuid3, "Third"]);
 	});
 
 	test("respects column order", () => {
-		const fragment = values(Posts, [{id: uuid1, title: "Hello"}], ["title", "id"]);
+		const fragment = Posts.values([{id: uuid1, title: "Hello"}], ["title", "id"]);
 		expect(fragment.sql).toBe("(?, ?)");
 		expect(fragment.params).toEqual(["Hello", uuid1]);
 	});
@@ -200,18 +199,18 @@ describe("values()", () => {
 	test("validates rows against schema", () => {
 		// viewCount must be an integer
 		expect(() =>
-			values(Posts, [{id: uuid1, viewCount: "not a number"}] as any, ["id", "viewCount"]),
+			Posts.values([{id: uuid1, viewCount: "not a number"}] as any, ["id", "viewCount"]),
 		).toThrow();
 	});
 
 	test("throws on empty rows", () => {
-		expect(() => values(Posts, [], ["id", "title"])).toThrow(
+		expect(() => Posts.values([], ["id", "title"])).toThrow(
 			"values() requires at least one row",
 		);
 	});
 
 	test("throws on empty columns", () => {
-		expect(() => values(Posts, [{id: uuid1}], [])).toThrow(
+		expect(() => Posts.values([{id: uuid1}], [])).toThrow(
 			"values() requires at least one column",
 		);
 	});
@@ -227,7 +226,7 @@ describe("values()", () => {
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[values(Posts, rows, ["id", "title", "published"])],
+			[Posts.values(rows, ["id", "title", "published"])],
 			"sqlite",
 		);
 
@@ -246,7 +245,7 @@ describe("values()", () => {
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[values(Posts, rows, ["id", "title"])],
+			[Posts.values(rows, ["id", "title"])],
 			"postgresql",
 		);
 
@@ -257,7 +256,7 @@ describe("values()", () => {
 
 describe("fragment interpolation in parseTemplate", () => {
 	test("where fragment in template", () => {
-		const fragment = where(Posts, {published: true});
+		const fragment = Posts.where({published: true});
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(strings, [fragment], "sqlite");
 
@@ -266,8 +265,8 @@ describe("fragment interpolation in parseTemplate", () => {
 	});
 
 	test("multiple fragments in template", () => {
-		const whereFragment = where(Posts, {published: true});
-		const setFragment = set(Posts, {title: "Updated"});
+		const whereFragment = Posts.where({published: true});
+		const setFragment = Posts.set({title: "Updated"});
 		const strings = [
 			"UPDATE posts SET ",
 			" WHERE ",
@@ -284,7 +283,7 @@ describe("fragment interpolation in parseTemplate", () => {
 	});
 
 	test("fragment with regular values", () => {
-		const fragment = where(Posts, {published: true});
+		const fragment = Posts.where({published: true});
 		const strings = [
 			"SELECT * FROM posts WHERE ",
 			" AND id = ",
@@ -301,7 +300,7 @@ describe("fragment interpolation in parseTemplate", () => {
 	});
 
 	test("postgresql placeholders", () => {
-		const fragment = where(Posts, {published: true, title: "Hello"});
+		const fragment = Posts.where({published: true, title: "Hello"});
 		const strings = [
 			"SELECT * FROM posts WHERE ",
 			" AND id = ",
@@ -319,4 +318,3 @@ describe("fragment interpolation in parseTemplate", () => {
 		expect(params).toEqual([true, "Hello", "post-123"]);
 	});
 });
-
