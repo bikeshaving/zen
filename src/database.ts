@@ -169,21 +169,51 @@ export class Transaction {
 	// Queries - Return Normalized Entities
 	// ==========================================================================
 
-	all<T extends Table<any>[]>(...tables: T): TaggedQuery<Infer<T[0]>[]> {
+	all<T extends Table<any>>(
+		tables: T | T[]
+	): TaggedQuery<Infer<T>[]> {
+		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tables, this.#dialect);
+			const query = createQuery(tableArray as Table<any>[], this.#dialect);
 			const {sql, params} = query(strings, ...values);
 			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
-			return normalize<Infer<T[0]>>(rows, tables);
+			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
 
-	get<T extends Table<any>[]>(...tables: T): TaggedQuery<Infer<T[0]> | null> {
+	get<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<Infer<T> | null>;
+	get<T extends Table<any>>(
+		tables: T | T[]
+	): TaggedQuery<Infer<T> | null>;
+	get<T extends Table<any>>(
+		tables: T | T[],
+		id?: string | number,
+	): Promise<Infer<T> | null> | TaggedQuery<Infer<T> | null> {
+		// Convenience overload: get by primary key
+		if (id !== undefined) {
+			const table = tables as T;
+			const pk = table.primaryKey();
+			if (!pk) {
+				return Promise.reject(new Error(`Table ${table.name} has no primary key defined`));
+			}
+			const tableName = this.#quoteIdent(table.name);
+			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+			return this.#driver.get<Record<string, unknown>>(
+				`SELECT * FROM ${tableName} WHERE ${whereClause}`,
+				[id],
+			).then((row) => row ? table.schema.parse(row) as Infer<T> : null);
+		}
+
+		// Tagged template query
+		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tables, this.#dialect);
+			const query = createQuery(tableArray as Table<any>[], this.#dialect);
 			const {sql, params} = query(strings, ...values);
 			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
-			return normalizeOne<Infer<T[0]>>(row, tables);
+			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
 	}
 
@@ -477,20 +507,25 @@ export class Database extends EventTarget {
 	 * Query multiple entities with joins and reference resolution.
 	 *
 	 * @example
-	 * const posts = await db.all(posts, users)`
+	 * // Single table
+	 * const posts = await db.all(Posts)`WHERE published = ${true}`;
+	 *
+	 * // Multi-table with joins
+	 * const posts = await db.all([Posts, Users])`
 	 *   JOIN users ON users.id = posts.author_id
 	 *   WHERE published = ${true}
 	 * `;
 	 * posts[0].author.name  // "Alice"
 	 */
-	all<T extends Table<any>[]>(
-		...tables: T
-	): TaggedQuery<Infer<T[0]>[]> {
+	all<T extends Table<any>>(
+		tables: T | T[]
+	): TaggedQuery<Infer<T>[]> {
+		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tables, this.#dialect);
+			const query = createQuery(tableArray as Table<any>[], this.#dialect);
 			const {sql, params} = query(strings, ...values);
 			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
-			return normalize<Infer<T[0]>>(rows, tables);
+			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
 
@@ -498,19 +533,51 @@ export class Database extends EventTarget {
 	 * Query a single entity.
 	 *
 	 * @example
-	 * const post = await db.get(posts, users)`
+	 * // By primary key
+	 * const post = await db.get(Posts, postId);
+	 *
+	 * // With query
+	 * const post = await db.get(Posts)`WHERE slug = ${slug}`;
+	 *
+	 * // Multi-table
+	 * const post = await db.get([Posts, Users])`
 	 *   JOIN users ON users.id = posts.author_id
 	 *   WHERE posts.id = ${postId}
 	 * `;
 	 */
-	get<T extends Table<any>[]>(
-		...tables: T
-	): TaggedQuery<Infer<T[0]> | null> {
+	get<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<Infer<T> | null>;
+	get<T extends Table<any>>(
+		tables: T | T[]
+	): TaggedQuery<Infer<T> | null>;
+	get<T extends Table<any>>(
+		tables: T | T[],
+		id?: string | number,
+	): Promise<Infer<T> | null> | TaggedQuery<Infer<T> | null> {
+		// Convenience overload: get by primary key
+		if (id !== undefined) {
+			const table = tables as T;
+			const pk = table.primaryKey();
+			if (!pk) {
+				return Promise.reject(new Error(`Table ${table.name} has no primary key defined`));
+			}
+			const tableName = this.#quoteIdent(table.name);
+			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+			return this.#driver.get<Record<string, unknown>>(
+				`SELECT * FROM ${tableName} WHERE ${whereClause}`,
+				[id],
+			).then((row) => row ? table.schema.parse(row) as Infer<T> : null);
+		}
+
+		// Tagged template query
+		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tables, this.#dialect);
+			const query = createQuery(tableArray as Table<any>[], this.#dialect);
 			const {sql, params} = query(strings, ...values);
 			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
-			return normalizeOne<Infer<T[0]>>(row, tables);
+			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
 	}
 

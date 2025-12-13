@@ -104,7 +104,7 @@ const user = await db.insert(Users, {
 });
 
 // 4. Query with normalization
-const posts = await db.all(Posts, Users)`
+const posts = await db.all([Posts, Users])`
   JOIN users ON ${Posts.on("authorId")}
   WHERE ${Posts.where({published: true})}
 `;
@@ -112,7 +112,10 @@ const posts = await db.all(Posts, Users)`
 posts[0].author.name;              // "Alice" — resolved from JOIN
 posts[0].author === posts[1].author; // true — same instance
 
-// 5. Update
+// 5. Get by primary key
+const post = await db.get(Posts, postId);
+
+// 6. Update
 await db.update(Users, user.id, {name: "Alice Smith"});
 ```
 
@@ -155,7 +158,7 @@ const Posts = table("posts", {...}, {
 **Partial selects** with `pick()`:
 ```typescript
 const UserSummary = Users.pick("id", "name");
-const posts = await db.all(Posts, UserSummary)`
+const posts = await db.all([Posts, UserSummary])`
   JOIN users ON ${Posts.on("authorId")}
 `;
 // posts[0].author has only id and name
@@ -168,14 +171,20 @@ const posts = await db.all(Posts, UserSummary)`
 Tagged templates with automatic parameterization:
 
 ```typescript
-// Normalized queries — entities with resolved references
-const posts = await db.all(Posts, Users)`
+// Single table query
+const posts = await db.all(Posts)`WHERE published = ${true}`;
+
+// Multi-table with joins — pass array
+const posts = await db.all([Posts, Users])`
   JOIN users ON ${Posts.on("authorId")}
   WHERE ${Posts.where({published: true})}
 `;
 
-// Single entity
-const post = await db.get(Posts)`WHERE id = ${postId}`;
+// Get single entity
+const post = await db.get(Posts)`WHERE slug = ${slug}`;
+
+// Get by primary key (convenience)
+const post = await db.get(Posts, postId);
 
 // Raw queries (no normalization)
 const counts = await db.query<{count: number}>`
@@ -209,7 +218,7 @@ await db.exec`
 // → UPDATE posts SET "title" = ?, "updatedAt" = ? WHERE id = ?
 
 // JOIN with on()
-const posts = await db.all(Posts, Users)`
+const posts = await db.all([Posts, Users])`
   JOIN users ON ${Posts.on("authorId")}
   WHERE published = ${true}
 `;
@@ -223,7 +232,7 @@ await db.exec`
 // → VALUES (?, ?, ?), (?, ?, ?)
 
 // Qualified column names with cols
-const posts = await db.all(Posts, Users)`
+const posts = await db.all([Posts, Users])`
   JOIN users ON ${Posts.on("authorId")}
   ORDER BY ${Posts.cols.createdAt} DESC
 `;

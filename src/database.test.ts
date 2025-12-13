@@ -64,7 +64,7 @@ describe("Database", () => {
 				},
 			]);
 
-			const results = await db.all(posts, users)`
+			const results = await db.all([posts, users])`
         JOIN "users" ON "users"."id" = "posts"."authorId"
         WHERE published = ${true}
       `;
@@ -91,7 +91,7 @@ describe("Database", () => {
 	});
 
 	describe("get()", () => {
-		test("returns single entity", async () => {
+		test("returns single entity with query", async () => {
 			(driver.get as any).mockImplementation(async () => ({
 				"posts.id": POST_ID,
 				"posts.authorId": USER_ID,
@@ -106,12 +106,40 @@ describe("Database", () => {
 			expect(post!.title).toBe("Test Post");
 		});
 
+		test("returns single entity by ID", async () => {
+			(driver.get as any).mockImplementation(async () => ({
+				id: POST_ID,
+				authorId: USER_ID,
+				title: "Test Post",
+				body: "Content",
+				published: true,
+			}));
+
+			const post = await db.get(posts, POST_ID);
+
+			expect(post).not.toBeNull();
+			expect(post!.title).toBe("Test Post");
+
+			// Check SQL was called with primary key
+			const [sql, params] = (driver.get as any).mock.calls[0];
+			expect(sql).toContain('SELECT * FROM "posts"');
+			expect(sql).toContain('WHERE "id" = ?');
+			expect(params).toEqual([POST_ID]);
+		});
+
 		test("returns null for no match", async () => {
 			(driver.get as any).mockImplementation(async () => null);
 
 			const post = await db.get(posts)`WHERE "posts"."id" = ${"nonexistent"}`;
 
 			expect(post).toBeNull();
+		});
+
+		test("throws for get by ID on table without primary key", async () => {
+			const noPk = table("no_pk", {name: z.string()});
+			await expect(db.get(noPk, "123")).rejects.toThrow(
+				"Table no_pk has no primary key defined",
+			);
 		});
 	});
 
