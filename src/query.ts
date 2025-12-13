@@ -56,7 +56,10 @@ export function isSQLFragment(value: unknown): value is SQLFragment {
  *
  * @internal Used by fragment helpers (where, set, on, etc.)
  */
-export function createFragment(sql: string, params: unknown[] = []): SQLFragment {
+export function createFragment(
+	sql: string,
+	params: unknown[] = [],
+): SQLFragment {
 	return {
 		[SQL_FRAGMENT]: true,
 		sql,
@@ -149,7 +152,10 @@ export function parseTemplate(
 				for (const param of value.params) {
 					params.push(param);
 					// Replace first ? with the correct placeholder for this dialect
-					fragmentSQL = fragmentSQL.replace("?", placeholder(params.length, dialect));
+					fragmentSQL = fragmentSQL.replace(
+						"?",
+						placeholder(params.length, dialect),
+					);
 				}
 				sql += fragmentSQL;
 			} else if (isTable(value)) {

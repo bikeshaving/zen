@@ -242,8 +242,10 @@ export type SetValues<T extends Table<any>> = {
  * A partial view of a table created via pick().
  * Can be used for queries but not for insert().
  */
-export interface PartialTable<T extends ZodRawShape = ZodRawShape>
-	extends Omit<Table<T>, "_meta"> {
+export interface PartialTable<T extends ZodRawShape = ZodRawShape> extends Omit<
+	Table<T>,
+	"_meta"
+> {
 	readonly _meta: Table<T>["_meta"] & {isPartial: true};
 }
 
@@ -362,10 +364,6 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	): SQLFragment;
 }
 
-type TableShape<T> = {
-	[K in keyof T]: T[K] extends FieldWrapper<infer S> ? S : T[K];
-};
-
 /**
  * Define a database table with a Zod schema.
  *
@@ -463,7 +461,9 @@ function qualifiedColumn(tableName: string, fieldName: string): string {
 /**
  * Check if a value is an operator object.
  */
-function isOperatorObject(value: unknown): value is ConditionOperators<unknown> {
+function isOperatorObject(
+	value: unknown,
+): value is ConditionOperators<unknown> {
 	if (value === null || typeof value !== "object") return false;
 	const keys = Object.keys(value);
 	return keys.length > 0 && keys.every((k) => k.startsWith("$"));
@@ -533,7 +533,10 @@ function buildCondition(
 /**
  * Create a column fragment proxy for Table.cols access.
  */
-function createColsProxy(tableName: string, zodShape: Record<string, ZodTypeAny>): Record<string, ColumnFragment> {
+function createColsProxy(
+	tableName: string,
+	zodShape: Record<string, ZodTypeAny>,
+): Record<string, ColumnFragment> {
 	return new Proxy({} as Record<string, ColumnFragment>, {
 		get(_target, prop: string): ColumnFragment | undefined {
 			if (prop in zodShape) {
@@ -553,7 +556,7 @@ function createColsProxy(tableName: string, zodShape: Record<string, ZodTypeAny>
 		},
 		getOwnPropertyDescriptor(_target, prop: string) {
 			if (prop in zodShape) {
-				return { enumerable: true, configurable: true };
+				return {enumerable: true, configurable: true};
 			}
 			return undefined;
 		},
@@ -622,7 +625,8 @@ function createTableObject(
 
 			// Filter metadata
 			const pickedMeta = {
-				primary: meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
+				primary:
+					meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
 				unique: meta.unique.filter((f) => fieldSet.has(f)),
 				indexed: meta.indexed.filter((f) => fieldSet.has(f)),
 				references: meta.references.filter((r) => fieldSet.has(r.fieldName)),
@@ -821,7 +825,14 @@ function unwrapType(schema: z.ZodType): UnwrapResult {
 		Object.assign(collectedMeta, metaLayers[i]);
 	}
 
-	return {core, isOptional, isNullable, hasDefault, defaultValue, collectedMeta};
+	return {
+		core,
+		isOptional,
+		isNullable,
+		hasDefault,
+		defaultValue,
+		collectedMeta,
+	};
 }
 
 /**
@@ -833,7 +844,14 @@ function extractFieldMeta(
 	zodType: ZodTypeAny,
 	dbMeta: FieldDbMeta,
 ): FieldMeta {
-	const {core, isOptional, isNullable, hasDefault, defaultValue, collectedMeta} = unwrapType(zodType);
+	const {
+		core,
+		isOptional,
+		isNullable,
+		hasDefault,
+		defaultValue,
+		collectedMeta,
+	} = unwrapType(zodType);
 
 	const meta: FieldMeta = {
 		name,
@@ -849,7 +867,8 @@ function extractFieldMeta(
 	if (dbMeta.reference) {
 		meta.reference = {
 			table: dbMeta.reference.table.name,
-			field: dbMeta.reference.field ?? dbMeta.reference.table.primaryKey() ?? "id",
+			field:
+				dbMeta.reference.field ?? dbMeta.reference.table.primaryKey() ?? "id",
 			as: dbMeta.reference.as,
 		};
 	}

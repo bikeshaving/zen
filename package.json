@@ -3,44 +3,125 @@
   "version": "0.1.0",
   "description": "Schema-driven database client. Zod schemas define storage, validation, and form fields.",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
     },
     "./bun": {
-      "types": "./dist/bun.d.ts",
-      "import": "./dist/bun.js"
+      "types": "./dist/src/bun.d.ts",
+      "import": "./dist/src/bun.js"
     },
     "./sqlite": {
-      "types": "./dist/sqlite.d.ts",
-      "import": "./dist/sqlite.js"
+      "types": "./dist/src/sqlite.d.ts",
+      "import": "./dist/src/sqlite.js"
     },
     "./postgres": {
-      "types": "./dist/postgres.d.ts",
-      "import": "./dist/postgres.js"
+      "types": "./dist/src/postgres.d.ts",
+      "import": "./dist/src/postgres.js"
     },
     "./mysql": {
-      "types": "./dist/mysql.d.ts",
-      "import": "./dist/mysql.js"
-    }
+      "types": "./dist/src/mysql.d.ts",
+      "import": "./dist/src/mysql.js"
+    },
+    "./bun.js": {
+      "types": "./dist/src/bun.d.ts",
+      "import": "./dist/src/bun.js"
+    },
+    "./database": {
+      "types": "./dist/src/database.d.ts",
+      "import": "./dist/src/database.js"
+    },
+    "./database.js": {
+      "types": "./dist/src/database.d.ts",
+      "import": "./dist/src/database.js"
+    },
+    "./ddl": {
+      "types": "./dist/src/ddl.d.ts",
+      "import": "./dist/src/ddl.js"
+    },
+    "./ddl.js": {
+      "types": "./dist/src/ddl.d.ts",
+      "import": "./dist/src/ddl.js"
+    },
+    "./errors": {
+      "types": "./dist/src/errors.d.ts",
+      "import": "./dist/src/errors.js"
+    },
+    "./errors.js": {
+      "types": "./dist/src/errors.d.ts",
+      "import": "./dist/src/errors.js"
+    },
+    "./index": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./index.js": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./mysql.js": {
+      "types": "./dist/src/mysql.d.ts",
+      "import": "./dist/src/mysql.js"
+    },
+    "./normalize": {
+      "types": "./dist/src/normalize.d.ts",
+      "import": "./dist/src/normalize.js"
+    },
+    "./normalize.js": {
+      "types": "./dist/src/normalize.d.ts",
+      "import": "./dist/src/normalize.js"
+    },
+    "./postgres.js": {
+      "types": "./dist/src/postgres.d.ts",
+      "import": "./dist/src/postgres.js"
+    },
+    "./query": {
+      "types": "./dist/src/query.d.ts",
+      "import": "./dist/src/query.js"
+    },
+    "./query.js": {
+      "types": "./dist/src/query.d.ts",
+      "import": "./dist/src/query.js"
+    },
+    "./sqlite.js": {
+      "types": "./dist/src/sqlite.d.ts",
+      "import": "./dist/src/sqlite.js"
+    },
+    "./table": {
+      "types": "./dist/src/table.d.ts",
+      "import": "./dist/src/table.js"
+    },
+    "./table.js": {
+      "types": "./dist/src/table.d.ts",
+      "import": "./dist/src/table.js"
+    },
+    "./package.json": "./dist/package.json"
   },
   "scripts": {
-    "build": "tsc",
-    "test": "bun test"
+    "build": "libuild build --save",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --ext .js,.jsx,.ts,.tsx .",
+    "prepublishOnly": "echo 'ERROR: Cannot publish from root directory. Use libuild publish instead.' && exit 1"
   },
   "dependencies": {
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
-    "@types/bun": "^1.3.4",
+    "@b9g/libuild": "^0.1.20",
+    "@eslint/js": "^9.39.2",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/bun": "^1.3.4",
+    "@typescript-eslint/eslint-plugin": "^8.49.0",
+    "@typescript-eslint/parser": "^8.49.0",
     "better-sqlite3": "^11.8.1",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "mysql2": "^3.12.0",
     "postgres": "^3.4.0",
-    "mysql2": "^3.12.0"
+    "typescript": "^5.7.3"
   },
   "peerDependencies": {
     "zod": "^4.0.0",
@@ -69,5 +150,7 @@
     "postgres",
     "mysql"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "module": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts"
 }

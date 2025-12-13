@@ -2,7 +2,7 @@
 
 A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), query builders (Kysely), and raw client wrappers with a single SQL-first library built on Zod schemas and event-driven migrations.
 
-**Not an ORM** — a thin wrapper over SQL that uses Zod schemas to define storage, validation, and metadata in one place.
+**Not an ORM** — a thin wrapper over SQL that uses Zod schemas to define storage, validation and metadata in one place.
 
 ## Design Principles
 

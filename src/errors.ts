@@ -136,11 +136,7 @@ export class NotFoundError extends ZealotError {
 	readonly tableName: string;
 	readonly id?: unknown;
 
-	constructor(
-		tableName: string,
-		id?: unknown,
-		options?: ErrorOptions,
-	) {
+	constructor(tableName: string, id?: unknown, options?: ErrorOptions) {
 		const message = id
 			? `${tableName} with id "${id}" not found`
 			: `${tableName} not found`;

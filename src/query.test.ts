@@ -96,10 +96,7 @@ describe("parseTemplate", () => {
 	});
 
 	test("trims whitespace", () => {
-		const strings = [
-			"  WHERE id = ",
-			"  ",
-		] as unknown as TemplateStringsArray;
+		const strings = ["  WHERE id = ", "  "] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, ["user-123"], "sqlite");
 
 		expect(result.sql).toBe("WHERE id = ?");
@@ -178,7 +175,8 @@ describe("createQuery", () => {
 describe("rawQuery", () => {
 	test("parses raw SQL template", () => {
 		const userId = "user-123";
-		const {sql, params} = rawQuery`SELECT COUNT(*) FROM posts WHERE author_id = ${userId}`;
+		const {sql, params} =
+			rawQuery`SELECT COUNT(*) FROM posts WHERE author_id = ${userId}`;
 
 		expect(sql).toBe("SELECT COUNT(*) FROM posts WHERE author_id = ?");
 		expect(params).toEqual(["user-123"]);
@@ -194,7 +192,11 @@ describe("rawQuery", () => {
 
 describe("table interpolation", () => {
 	test("interpolates table as quoted name - sqlite", () => {
-		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const strings = [
+			"FROM ",
+			" WHERE id = ",
+			"",
+		] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [posts, "123"], "sqlite");
 
 		expect(result.sql).toBe('FROM "posts" WHERE id = ?');
@@ -202,7 +204,11 @@ describe("table interpolation", () => {
 	});
 
 	test("interpolates table as quoted name - postgresql", () => {
-		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const strings = [
+			"FROM ",
+			" WHERE id = ",
+			"",
+		] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [posts, "123"], "postgresql");
 
 		expect(result.sql).toBe('FROM "posts" WHERE id = $1');
@@ -210,7 +216,11 @@ describe("table interpolation", () => {
 	});
 
 	test("interpolates table as quoted name - mysql", () => {
-		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const strings = [
+			"FROM ",
+			" WHERE id = ",
+			"",
+		] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [posts, "123"], "mysql");
 
 		expect(result.sql).toBe("FROM `posts` WHERE id = ?");
@@ -225,7 +235,11 @@ describe("table interpolation", () => {
 			".id = ",
 			".authorId",
 		] as unknown as TemplateStringsArray;
-		const result = parseTemplate(strings, [posts, users, users, posts], "sqlite");
+		const result = parseTemplate(
+			strings,
+			[posts, users, users, posts],
+			"sqlite",
+		);
 
 		expect(result.sql).toBe(
 			'FROM "posts" JOIN "users" ON "users".id = "posts".authorId',

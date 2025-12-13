@@ -183,6 +183,7 @@ describe("table", () => {
 
 describe("type inference", () => {
 	test("Infer extracts document type", () => {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const users = table("users", {
 			id: z.string().uuid(),
 			name: z.string(),

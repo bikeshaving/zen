@@ -44,42 +44,17 @@ export {
 } from "./ddl.js";
 
 export {
-	// Query building
-	buildSelectColumns,
-	parseTemplate,
-	buildQuery,
-	createQuery,
-	rawQuery,
-	createRawQuery,
+	// SQL dialect
 	type SQLDialect,
-	type QueryOptions,
-	type ParsedQuery,
 	// SQL fragments
-	isSQLFragment,
-	createFragment,
 	type SQLFragment,
 } from "./query.js";
-
-export {
-	// Normalization
-	normalize,
-	normalizeOne,
-	extractEntityData,
-	buildEntityMap,
-	resolveReferences,
-	getPrimaryKeyValue,
-	entityKey,
-	type RawRow,
-	type EntityMap,
-	type TableMap,
-} from "./normalize.js";
 
 export {
 	// Database wrapper
 	Database,
 	Transaction,
 	DatabaseUpgradeEvent,
-	createDatabase,
 	type DatabaseAdapter,
 	type DatabaseDriver,
 	type TransactionDriver,

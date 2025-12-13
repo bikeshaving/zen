@@ -53,7 +53,10 @@ export interface PostgresOptions {
  * // When done:
  * await close();
  */
-export function createDriver(url: string, options: PostgresOptions = {}): DatabaseAdapter {
+export function createDriver(
+	url: string,
+	options: PostgresOptions = {},
+): DatabaseAdapter {
 	const sql = postgres(url, {
 		max: options.max ?? 10,
 		idle_timeout: options.idleTimeout ?? 30,

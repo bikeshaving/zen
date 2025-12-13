@@ -106,7 +106,9 @@ export function createDriver(
 				try {
 					return await fn();
 				} finally {
-					await sql.unsafe(`SELECT pg_advisory_unlock($1)`, [MIGRATION_LOCK_ID]);
+					await sql.unsafe(`SELECT pg_advisory_unlock($1)`, [
+						MIGRATION_LOCK_ID,
+					]);
 				}
 			} else if (dialect === "mysql") {
 				// MySQL: named lock

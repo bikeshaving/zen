@@ -29,7 +29,9 @@ describe("Table.where()", () => {
 
 	test("multiple conditions (AND-joined)", () => {
 		const fragment = Posts.where({published: true, title: "Hello"});
-		expect(fragment.sql).toBe('"posts"."published" = ? AND "posts"."title" = ?');
+		expect(fragment.sql).toBe(
+			'"posts"."published" = ? AND "posts"."title" = ?',
+		);
 		expect(fragment.params).toEqual([true, "Hello"]);
 	});
 
@@ -101,7 +103,9 @@ describe("Table.where()", () => {
 
 	test("multiple operators on same field", () => {
 		const fragment = Posts.where({viewCount: {$gte: 10, $lte: 100}});
-		expect(fragment.sql).toBe('"posts"."viewCount" >= ? AND "posts"."viewCount" <= ?');
+		expect(fragment.sql).toBe(
+			'"posts"."viewCount" >= ? AND "posts"."viewCount" <= ?',
+		);
 		expect(fragment.params).toEqual([10, 100]);
 	});
 
@@ -174,7 +178,10 @@ describe("Table.values()", () => {
 	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
 
 	test("single row with specified columns", () => {
-		const fragment = Posts.values([{id: uuid1, title: "Hello"}], ["id", "title"]);
+		const fragment = Posts.values(
+			[{id: uuid1, title: "Hello"}],
+			["id", "title"],
+		);
 		expect(fragment.sql).toBe("(?, ?)");
 		expect(fragment.params).toEqual([uuid1, "Hello"]);
 	});
@@ -187,11 +194,21 @@ describe("Table.values()", () => {
 		];
 		const fragment = Posts.values(rows, ["id", "title"]);
 		expect(fragment.sql).toBe("(?, ?), (?, ?), (?, ?)");
-		expect(fragment.params).toEqual([uuid1, "First", uuid2, "Second", uuid3, "Third"]);
+		expect(fragment.params).toEqual([
+			uuid1,
+			"First",
+			uuid2,
+			"Second",
+			uuid3,
+			"Third",
+		]);
 	});
 
 	test("respects column order", () => {
-		const fragment = Posts.values([{id: uuid1, title: "Hello"}], ["title", "id"]);
+		const fragment = Posts.values(
+			[{id: uuid1, title: "Hello"}],
+			["title", "id"],
+		);
 		expect(fragment.sql).toBe("(?, ?)");
 		expect(fragment.params).toEqual(["Hello", uuid1]);
 	});
@@ -199,7 +216,10 @@ describe("Table.values()", () => {
 	test("validates rows against schema", () => {
 		// viewCount must be an integer
 		expect(() =>
-			Posts.values([{id: uuid1, viewCount: "not a number"}] as any, ["id", "viewCount"]),
+			Posts.values([{id: uuid1, viewCount: "not a number"}] as any, [
+				"id",
+				"viewCount",
+			]),
 		).toThrow();
 	});
 
@@ -230,7 +250,9 @@ describe("Table.values()", () => {
 			"sqlite",
 		);
 
-		expect(sql).toBe("INSERT INTO posts (id, title, published) VALUES (?, ?, ?), (?, ?, ?)");
+		expect(sql).toBe(
+			"INSERT INTO posts (id, title, published) VALUES (?, ?, ?), (?, ?, ?)",
+		);
 		expect(params).toEqual([uuid1, "First", true, uuid2, "Second", false]);
 	});
 
@@ -278,7 +300,9 @@ describe("fragment interpolation in parseTemplate", () => {
 			"sqlite",
 		);
 
-		expect(sql).toBe('UPDATE posts SET "title" = ? WHERE "posts"."published" = ?');
+		expect(sql).toBe(
+			'UPDATE posts SET "title" = ? WHERE "posts"."published" = ?',
+		);
 		expect(params).toEqual(["Updated", true]);
 	});
 
@@ -295,7 +319,9 @@ describe("fragment interpolation in parseTemplate", () => {
 			"sqlite",
 		);
 
-		expect(sql).toBe('SELECT * FROM posts WHERE "posts"."published" = ? AND id = ?');
+		expect(sql).toBe(
+			'SELECT * FROM posts WHERE "posts"."published" = ? AND id = ?',
+		);
 		expect(params).toEqual([true, "post-123"]);
 	});
 

@@ -1,31 +1,31 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, primary, unique, references} from "./table.js";
-import {Database, createDatabase, type DatabaseDriver} from "./database.js";
+import {Database, type DatabaseDriver} from "./database.js";
 
 // Test UUIDs (RFC 4122 compliant - version 4, variant 1)
 const USER_ID = "11111111-1111-4111-a111-111111111111";
-const USER_ID_2 = "22222222-2222-4222-a222-222222222222";
 const POST_ID = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-const POST_ID_2 = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
 
 // Test tables
-const users = table("users", {
+const Users = table("users", {
 	id: primary(z.string().uuid()),
 	email: unique(z.string().email()),
 	name: z.string(),
 });
 
-const posts = table("posts", {
+const Posts = table("posts", {
 	id: primary(z.string().uuid()),
-	authorId: references(z.string().uuid(), users, {as: "author"}),
+	authorId: references(z.string().uuid(), Users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
 	published: z.boolean().default(false),
 });
 
 // Mock driver factory (default: SQLite-style escaping)
-function createMockDriver(dialect: "sqlite" | "mysql" | "postgresql" = "sqlite"): DatabaseDriver {
+function createMockDriver(
+	dialect: "sqlite" | "mysql" | "postgresql" = "sqlite",
+): DatabaseDriver {
 	return {
 		all: mock(async () => []) as DatabaseDriver["all"],
 		get: mock(async () => null) as DatabaseDriver["get"],
@@ -64,7 +64,7 @@ describe("Database", () => {
 				},
 			]);
 
-			const results = await db.all([posts, users])`
+			const results = await db.all([Posts, Users])`
         JOIN "users" ON "users"."id" = "posts"."authorId"
         WHERE published = ${true}
       `;
@@ -84,7 +84,7 @@ describe("Database", () => {
 		test("returns empty array for no results", async () => {
 			(driver.all as any).mockImplementation(async () => []);
 
-			const results = await db.all(posts)`WHERE id = ${"nonexistent"}`;
+			const results = await db.all(Posts)`WHERE id = ${"nonexistent"}`;
 
 			expect(results).toEqual([]);
 		});
@@ -100,7 +100,7 @@ describe("Database", () => {
 				"posts.published": true,
 			}));
 
-			const post = await db.get(posts)`WHERE "posts"."id" = ${POST_ID}`;
+			const post = await db.get(Posts)`WHERE "posts"."id" = ${POST_ID}`;
 
 			expect(post).not.toBeNull();
 			expect(post!.title).toBe("Test Post");
@@ -115,7 +115,7 @@ describe("Database", () => {
 				published: true,
 			}));
 
-			const post = await db.get(posts, POST_ID);
+			const post = await db.get(Posts, POST_ID);
 
 			expect(post).not.toBeNull();
 			expect(post!.title).toBe("Test Post");
@@ -130,7 +130,7 @@ describe("Database", () => {
 		test("returns null for no match", async () => {
 			(driver.get as any).mockImplementation(async () => null);
 
-			const post = await db.get(posts)`WHERE "posts"."id" = ${"nonexistent"}`;
+			const post = await db.get(Posts)`WHERE "posts"."id" = ${"nonexistent"}`;
 
 			expect(post).toBeNull();
 		});
@@ -152,7 +152,7 @@ describe("Database", () => {
 				name: "Alice",
 			}));
 
-			const user = await db.insert(users, {
+			const user = await db.insert(Users, {
 				id: USER_ID,
 				email: "alice@example.com",
 				name: "Alice",
@@ -172,7 +172,7 @@ describe("Database", () => {
 
 		test("validates through Zod schema", async () => {
 			await expect(
-				db.insert(users, {
+				db.insert(Users, {
 					id: USER_ID,
 					email: "not-an-email", // Invalid email
 					name: "Alice",
@@ -190,7 +190,7 @@ describe("Database", () => {
 				published: false, // DB applied default
 			}));
 
-			const post = await db.insert(posts, {
+			const post = await db.insert(Posts, {
 				id: POST_ID,
 				authorId: USER_ID,
 				title: "Test",
@@ -202,7 +202,7 @@ describe("Database", () => {
 		});
 
 		test("throws on partial table", async () => {
-			const partialUsers = users.pick("id", "name");
+			const partialUsers = Users.pick("id", "name");
 
 			await expect(
 				db.insert(partialUsers as any, {id: USER_ID, name: "Alice"}),
@@ -218,7 +218,7 @@ describe("Database", () => {
 				name: "Alice Updated",
 			}));
 
-			const user = await db.update(users, USER_ID, {name: "Alice Updated"});
+			const user = await db.update(Users, USER_ID, {name: "Alice Updated"});
 
 			expect(user).not.toBeNull();
 			expect(user!.name).toBe("Alice Updated");
@@ -233,7 +233,7 @@ describe("Database", () => {
 		});
 
 		test("throws on no fields to update", async () => {
-			await expect(db.update(users, USER_ID, {})).rejects.toThrow(
+			await expect(db.update(Users, USER_ID, {})).rejects.toThrow(
 				"No fields to update",
 			);
 		});
@@ -241,7 +241,7 @@ describe("Database", () => {
 		test("returns null if entity not found after update", async () => {
 			(driver.get as any).mockImplementation(async () => null);
 
-			const user = await db.update(users, "nonexistent", {name: "Test"});
+			const user = await db.update(Users, "nonexistent", {name: "Test"});
 
 			expect(user).toBeNull();
 		});
@@ -251,7 +251,7 @@ describe("Database", () => {
 		test("deletes by primary key", async () => {
 			(driver.run as any).mockImplementation(async () => 1);
 
-			const deleted = await db.delete(users, USER_ID);
+			const deleted = await db.delete(Users, USER_ID);
 
 			expect(deleted).toBe(true);
 
@@ -264,7 +264,7 @@ describe("Database", () => {
 		test("returns false if nothing deleted", async () => {
 			(driver.run as any).mockImplementation(async () => 0);
 
-			const deleted = await db.delete(users, "nonexistent");
+			const deleted = await db.delete(Users, "nonexistent");
 
 			expect(deleted).toBe(false);
 		});
@@ -329,7 +329,7 @@ describe("MySQL dialect", () => {
 		const driver = createMockDriver("mysql");
 		const db = new Database(driver, {dialect: "mysql"});
 
-		await db.insert(users, {
+		await db.insert(Users, {
 			id: USER_ID,
 			email: "test@example.com",
 			name: "Test",
@@ -357,22 +357,6 @@ describe("escapeIdentifier", () => {
 	});
 });
 
-describe("createDatabase()", () => {
-	test("creates Database instance", () => {
-		const driver = createMockDriver();
-		const db = createDatabase(driver);
-
-		expect(db).toBeInstanceOf(Database);
-	});
-
-	test("accepts options", () => {
-		const driver = createMockDriver();
-		const db = createDatabase(driver, {dialect: "postgresql"});
-
-		expect(db).toBeInstanceOf(Database);
-	});
-});
-
 describe("transaction()", () => {
 	test("commits on success", async () => {
 		const driver = createMockDriver();
@@ -385,7 +369,7 @@ describe("transaction()", () => {
 		const db = new Database(driver);
 
 		const result = await db.transaction(async (tx) => {
-			await tx.insert(users, {
+			await tx.insert(Users, {
 				id: USER_ID,
 				email: "alice@example.com",
 				name: "Alice",
@@ -421,7 +405,7 @@ describe("transaction()", () => {
 		const error = new Error("Test error");
 		await expect(
 			db.transaction(async (tx) => {
-				await tx.insert(users, {
+				await tx.insert(Users, {
 					id: USER_ID,
 					email: "alice@example.com",
 					name: "Alice",
@@ -484,7 +468,7 @@ describe("transaction()", () => {
 		const db = new Database(driver);
 
 		await db.transaction(async (tx) => {
-			await tx.insert(users, {
+			await tx.insert(Users, {
 				id: USER_ID,
 				email: "alice@example.com",
 				name: "Alice",

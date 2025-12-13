@@ -1,5 +1,9 @@
-import {test, expect, describe, beforeEach, mock} from "bun:test";
-import {Database, DatabaseUpgradeEvent, type DatabaseDriver} from "./database.js";
+import {test, expect, describe, mock} from "bun:test";
+import {
+	Database,
+	DatabaseUpgradeEvent,
+	type DatabaseDriver,
+} from "./database.js";
 
 // In-memory SQLite-like driver for testing
 function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
@@ -7,14 +11,14 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 
 	return {
 		tables,
-		async all<T>(sql: string, params: unknown[]): Promise<T[]> {
+		async all<T>(sql: string, _params: unknown[]): Promise<T[]> {
 			// Simple mock - just handle _migrations table
 			if (sql.includes("_migrations")) {
 				return (tables.get("_migrations") ?? []) as T[];
 			}
 			return [];
 		},
-		async get<T>(sql: string, params: unknown[]): Promise<T | null> {
+		async get<T>(sql: string, _params: unknown[]): Promise<T | null> {
 			if (sql.includes("MAX(version)")) {
 				const migrations = tables.get("_migrations") ?? [];
 				if (migrations.length === 0) return {version: null} as T;
@@ -32,7 +36,10 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 			}
 			if (sql.includes("INSERT INTO _migrations")) {
 				const migrations = tables.get("_migrations") ?? [];
-				migrations.push({version: params[0], applied_at: new Date().toISOString()});
+				migrations.push({
+					version: params[0],
+					applied_at: new Date().toISOString(),
+				});
 				tables.set("_migrations", migrations);
 				return 1;
 			}
@@ -44,7 +51,7 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 			}
 			return 0;
 		},
-		async val<T>(sql: string, params: unknown[]): Promise<T> {
+		async val<T>(_sql: string, _params: unknown[]): Promise<T> {
 			return 0 as T;
 		},
 		escapeIdentifier(name: string): string {
@@ -112,7 +119,9 @@ describe("Database migrations", () => {
 		test("fires with correct oldVersion on upgrade", async () => {
 			const driver = createTestDriver();
 			// Pre-populate with version 1
-			driver.tables.set("_migrations", [{version: 1, applied_at: "2024-01-01"}]);
+			driver.tables.set("_migrations", [
+				{version: 1, applied_at: "2024-01-01"},
+			]);
 
 			const db = new Database(driver);
 			let capturedEvent: DatabaseUpgradeEvent | null = null;
@@ -128,7 +137,9 @@ describe("Database migrations", () => {
 
 		test("does NOT fire if version matches", async () => {
 			const driver = createTestDriver();
-			driver.tables.set("_migrations", [{version: 2, applied_at: "2024-01-01"}]);
+			driver.tables.set("_migrations", [
+				{version: 2, applied_at: "2024-01-01"},
+			]);
 
 			const db = new Database(driver);
 			const handler = mock(() => {});
@@ -141,7 +152,9 @@ describe("Database migrations", () => {
 
 		test("does NOT fire if requested version is lower", async () => {
 			const driver = createTestDriver();
-			driver.tables.set("_migrations", [{version: 3, applied_at: "2024-01-01"}]);
+			driver.tables.set("_migrations", [
+				{version: 3, applied_at: "2024-01-01"},
+			]);
 
 			const db = new Database(driver);
 			const handler = mock(() => {});

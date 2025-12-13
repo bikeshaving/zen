@@ -5,7 +5,7 @@
  * with references resolved to actual object instances.
  */
 
-import type {Table, ReferenceInfo} from "./table.js";
+import type {Table} from "./table.js";
 
 // ============================================================================
 // Types
@@ -243,10 +243,7 @@ function validateRegisteredTables(rows: RawRow[], tables: Table<any>[]): void {
  * const posts = normalize(rows, [posts, users]);
  * // posts[0].author === posts[1].author  // Same instance!
  */
-export function normalize<T>(
-	rows: RawRow[],
-	tables: Table<any>[],
-): T[] {
+export function normalize<T>(rows: RawRow[], tables: Table<any>[]): T[] {
 	if (tables.length === 0) {
 		throw new Error("At least one table is required");
 	}

@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, references, index} from "./table.js";
+import {table, primary, unique, references} from "./table.js";
 import {
 	extractEntityData,
 	getPrimaryKeyValue,
@@ -476,7 +476,12 @@ describe("deep nesting (3+ tables)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [employees, offices, cities, countries]);
+		const results = normalize<any>(rows, [
+			employees,
+			offices,
+			cities,
+			countries,
+		]);
 
 		expect(results[0].name).toBe("Alice");
 		expect(results[0].office.name).toBe("HQ");

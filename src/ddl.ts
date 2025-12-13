@@ -208,8 +208,13 @@ export function generateDDL<T extends Table<any>>(
 
 	for (const [name, zodType] of Object.entries(shape)) {
 		const fieldMeta = meta.fields[name] || {};
-		const {isOptional, isNullable, hasDefault} = unwrapType(zodType as z.ZodType);
-		const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(zodType as z.ZodType, dialect);
+		const {isOptional, isNullable, hasDefault} = unwrapType(
+			zodType as z.ZodType,
+		);
+		const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
+			zodType as z.ZodType,
+			dialect,
+		);
 
 		const column: ColumnDef = {
 			name,
@@ -263,7 +268,8 @@ export function generateDDL<T extends Table<any>>(
 
 		// Add ON DELETE behavior
 		if (ref.onDelete) {
-			const onDeleteSQL = ref.onDelete === "set null" ? "SET NULL" : ref.onDelete.toUpperCase();
+			const onDeleteSQL =
+				ref.onDelete === "set null" ? "SET NULL" : ref.onDelete.toUpperCase();
 			fk += ` ON DELETE ${onDeleteSQL}`;
 		}
 

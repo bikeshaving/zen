@@ -22,7 +22,10 @@ export interface DatabaseDriver {
 	/**
 	 * Execute a query and return all rows.
 	 */
-	all<T = Record<string, unknown>>(sql: string, params: unknown[]): Promise<T[]>;
+	all<T = Record<string, unknown>>(
+		sql: string,
+		params: unknown[],
+	): Promise<T[]>;
 
 	/**
 	 * Execute a query and return the first row.
@@ -109,10 +112,7 @@ export class DatabaseUpgradeEvent extends Event {
 	readonly newVersion: number;
 	#promises: Promise<void>[] = [];
 
-	constructor(
-		type: string,
-		init: {oldVersion: number; newVersion: number},
-	) {
+	constructor(type: string, init: {oldVersion: number; newVersion: number}) {
 		super(type);
 		this.oldVersion = init.oldVersion;
 		this.newVersion = init.newVersion;
@@ -169,9 +169,7 @@ export class Transaction {
 	// Queries - Return Normalized Entities
 	// ==========================================================================
 
-	all<T extends Table<any>>(
-		tables: T | T[]
-	): TaggedQuery<Infer<T>[]> {
+	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const query = createQuery(tableArray as Table<any>[], this.#dialect);
@@ -185,9 +183,7 @@ export class Transaction {
 		table: T,
 		id: string | number,
 	): Promise<Infer<T> | null>;
-	get<T extends Table<any>>(
-		tables: T | T[]
-	): TaggedQuery<Infer<T> | null>;
+	get<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T> | null>;
 	get<T extends Table<any>>(
 		tables: T | T[],
 		id?: string | number,
@@ -197,14 +193,17 @@ export class Transaction {
 			const table = tables as T;
 			const pk = table.primaryKey();
 			if (!pk) {
-				return Promise.reject(new Error(`Table ${table.name} has no primary key defined`));
+				return Promise.reject(
+					new Error(`Table ${table.name} has no primary key defined`),
+				);
 			}
 			const tableName = this.#quoteIdent(table.name);
 			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-			return this.#driver.get<Record<string, unknown>>(
-				`SELECT * FROM ${tableName} WHERE ${whereClause}`,
-				[id],
-			).then((row) => row ? table.schema.parse(row) as Infer<T> : null);
+			return this.#driver
+				.get<
+					Record<string, unknown>
+				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
+				.then((row) => (row ? (table.schema.parse(row) as Infer<T>) : null));
 		}
 
 		// Tagged template query
@@ -221,7 +220,10 @@ export class Transaction {
 	// Mutations - Validate Through Zod
 	// ==========================================================================
 
-	async insert<T extends Table<any>>(table: T, data: Insert<T>): Promise<Infer<T>> {
+	async insert<T extends Table<any>>(
+		table: T,
+		data: Insert<T>,
+	): Promise<Infer<T>> {
 		if (table._meta.isPartial) {
 			throw new Error(
 				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
@@ -234,7 +236,9 @@ export class Transaction {
 		const values = Object.values(validated);
 		const tableName = this.#quoteIdent(table.name);
 		const columnList = columns.map((c) => this.#quoteIdent(c)).join(", ");
-		const placeholders = columns.map((_, i) => this.#placeholder(i + 1)).join(", ");
+		const placeholders = columns
+			.map((_, i) => this.#placeholder(i + 1))
+			.join(", ");
 
 		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
 		if (this.#dialect !== "mysql") {
@@ -278,7 +282,10 @@ export class Transaction {
 		// Use RETURNING for SQLite/PostgreSQL
 		if (this.#dialect !== "mysql") {
 			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [
+				...values,
+				id,
+			]);
 			if (!row) return null;
 			return table.schema.parse(row) as Infer<T>;
 		}
@@ -288,7 +295,9 @@ export class Transaction {
 		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+			id,
+		]);
 		if (!row) return null;
 		return table.schema.parse(row) as Infer<T>;
 	}
@@ -323,12 +332,18 @@ export class Transaction {
 		return this.#driver.all<T>(sql, params);
 	}
 
-	async exec(strings: TemplateStringsArray, ...values: unknown[]): Promise<number> {
+	async exec(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Promise<number> {
 		const {sql, params} = parseTemplate(strings, values, this.#dialect);
 		return this.#driver.run(sql, params);
 	}
 
-	async val<T>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T> {
+	async val<T>(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Promise<T> {
 		const {sql, params} = parseTemplate(strings, values, this.#dialect);
 		return this.#driver.val<T>(sql, params);
 	}
@@ -474,14 +489,6 @@ export class Database extends EventTarget {
 		);
 	}
 
-	async #getCurrentVersion(): Promise<number> {
-		const row = await this.#driver.get<{version: number}>(
-			"SELECT MAX(version) as version FROM _migrations",
-			[],
-		);
-		return row?.version ?? 0;
-	}
-
 	async #getCurrentVersionLocked(): Promise<number> {
 		// Locking is handled by withMigrationLock() (advisory locks) or
 		// the transaction wrapper (BEGIN IMMEDIATE for SQLite, or transaction for others)
@@ -517,9 +524,7 @@ export class Database extends EventTarget {
 	 * `;
 	 * posts[0].author.name  // "Alice"
 	 */
-	all<T extends Table<any>>(
-		tables: T | T[]
-	): TaggedQuery<Infer<T>[]> {
+	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const query = createQuery(tableArray as Table<any>[], this.#dialect);
@@ -549,9 +554,7 @@ export class Database extends EventTarget {
 		table: T,
 		id: string | number,
 	): Promise<Infer<T> | null>;
-	get<T extends Table<any>>(
-		tables: T | T[]
-	): TaggedQuery<Infer<T> | null>;
+	get<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T> | null>;
 	get<T extends Table<any>>(
 		tables: T | T[],
 		id?: string | number,
@@ -561,14 +564,17 @@ export class Database extends EventTarget {
 			const table = tables as T;
 			const pk = table.primaryKey();
 			if (!pk) {
-				return Promise.reject(new Error(`Table ${table.name} has no primary key defined`));
+				return Promise.reject(
+					new Error(`Table ${table.name} has no primary key defined`),
+				);
 			}
 			const tableName = this.#quoteIdent(table.name);
 			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-			return this.#driver.get<Record<string, unknown>>(
-				`SELECT * FROM ${tableName} WHERE ${whereClause}`,
-				[id],
-			).then((row) => row ? table.schema.parse(row) as Infer<T> : null);
+			return this.#driver
+				.get<
+					Record<string, unknown>
+				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
+				.then((row) => (row ? (table.schema.parse(row) as Infer<T>) : null));
 		}
 
 		// Tagged template query
@@ -667,7 +673,10 @@ export class Database extends EventTarget {
 		// Use RETURNING for SQLite/PostgreSQL
 		if (this.#dialect !== "mysql") {
 			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [
+				...values,
+				id,
+			]);
 			if (!row) return null;
 			return table.schema.parse(row) as Infer<T>;
 		}
@@ -677,7 +686,9 @@ export class Database extends EventTarget {
 		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+			id,
+		]);
 		if (!row) return null;
 		return table.schema.parse(row) as Infer<T>;
 	}
@@ -817,23 +828,4 @@ export class Database extends EventTarget {
 		}
 		return "?";
 	}
-}
-
-// ============================================================================
-// Factory
-// ============================================================================
-
-/**
- * Create a database instance with the given driver.
- *
- * @example
- * import { createDatabase } from "@b9g/zealot";
- *
- * const db = createDatabase(sqliteDriver, { dialect: "sqlite" });
- */
-export function createDatabase(
-	driver: DatabaseDriver,
-	options?: DatabaseOptions,
-): Database {
-	return new Database(driver, options);
 }

@@ -53,7 +53,10 @@ export interface MySQLOptions {
  * // When done:
  * await close();
  */
-export function createDriver(url: string, options: MySQLOptions = {}): DatabaseAdapter {
+export function createDriver(
+	url: string,
+	options: MySQLOptions = {},
+): DatabaseAdapter {
 	const pool = mysql.createPool({
 		uri: url,
 		connectionLimit: options.connectionLimit ?? 10,
@@ -96,10 +99,10 @@ export function createDriver(url: string, options: MySQLOptions = {}): DatabaseA
 			const LOCK_NAME = "zealot_migration";
 			const LOCK_TIMEOUT = 10;
 
-			const [lockResult] = await pool.execute(
-				`SELECT GET_LOCK(?, ?)`,
-				[LOCK_NAME, LOCK_TIMEOUT],
-			);
+			const [lockResult] = await pool.execute(`SELECT GET_LOCK(?, ?)`, [
+				LOCK_NAME,
+				LOCK_TIMEOUT,
+			]);
 			const acquired = (lockResult as any[])[0]?.["GET_LOCK(?, ?)"] === 1;
 
 			if (!acquired) {

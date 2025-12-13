@@ -63,7 +63,10 @@ export function createDriver(url: string): DatabaseAdapter {
 		},
 
 		async val<T>(sql: string, params: unknown[]): Promise<T> {
-			return sqlite.prepare(sql).pluck().get(...params) as T;
+			return sqlite
+				.prepare(sql)
+				.pluck()
+				.get(...params) as T;
 		},
 
 		escapeIdentifier(name: string): string {
