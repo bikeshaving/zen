@@ -238,6 +238,15 @@ export type SetValues<T extends Table<any>> = {
 	[K in keyof Infer<T>]?: Infer<T>[K];
 };
 
+/**
+ * A partial view of a table created via pick().
+ * Can be used for queries but not for insert().
+ */
+export interface PartialTable<T extends ZodRawShape = ZodRawShape>
+	extends Omit<Table<T>, "_meta"> {
+	readonly _meta: Table<T>["_meta"] & {isPartial: true};
+}
+
 export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly [TABLE_MARKER]: true;
 	readonly name: string;
@@ -251,6 +260,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		indexed: string[];
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
+		/** True if this is a partial table created via pick() */
+		isPartial?: boolean;
 	};
 
 	/** Get field metadata for forms/admin */
@@ -266,7 +277,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * Create a partial view of this table with only the specified fields.
 	 *
 	 * Useful for partial selects - the returned table-like object can be
-	 * passed to all(), one(), where(), etc.
+	 * passed to all(), get(), where(), etc. Cannot be used with insert().
 	 *
 	 * @example
 	 * const PostSummary = Posts.pick('id', 'title', 'authorId');
@@ -274,7 +285,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 */
 	pick<K extends keyof z.infer<ZodObject<T>>>(
 		...fields: K[]
-	): Table<Pick<T, K & keyof T>>;
+	): PartialTable<Pick<T, K & keyof T>>;
 
 	/**
 	 * Access qualified column names as SQL fragments.
@@ -591,7 +602,7 @@ function createTableObject(
 			return meta.references;
 		},
 
-		pick(...fields: string[]): Table<any> {
+		pick(...fields: string[]): PartialTable<any> {
 			const fieldSet = new Set(fields);
 
 			// Pick the schema fields
@@ -618,6 +629,7 @@ function createTableObject(
 				fields: Object.fromEntries(
 					Object.entries(meta.fields).filter(([k]) => fieldSet.has(k)),
 				),
+				isPartial: true,
 			};
 
 			// Filter indexes to only those with all fields present
@@ -631,7 +643,7 @@ function createTableObject(
 				pickedZodShape,
 				pickedMeta,
 				pickedIndexes,
-			);
+			) as PartialTable<any>;
 		},
 
 		where(conditions: Record<string, unknown>): SQLFragment {

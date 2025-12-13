@@ -172,6 +172,14 @@ describe("Database", () => {
 
 			expect(post.published).toBe(false);
 		});
+
+		test("throws on partial table", async () => {
+			const partialUsers = users.pick("id", "name");
+
+			await expect(
+				db.insert(partialUsers as any, {id: USER_ID, name: "Alice"}),
+			).rejects.toThrow('Cannot insert into partial table "users"');
+		});
 	});
 
 	describe("update()", () => {

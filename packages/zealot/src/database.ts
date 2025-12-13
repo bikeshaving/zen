@@ -192,6 +192,12 @@ export class Transaction {
 	// ==========================================================================
 
 	async insert<T extends Table<any>>(table: T, data: Insert<T>): Promise<Infer<T>> {
+		if (table._meta.isPartial) {
+			throw new Error(
+				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
+			);
+		}
+
 		const validated = table.schema.parse(data);
 
 		const columns = Object.keys(validated);
@@ -528,6 +534,12 @@ export class Database extends EventTarget {
 		table: T,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
+		if (table._meta.isPartial) {
+			throw new Error(
+				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
+			);
+		}
+
 		const validated = table.schema.parse(data);
 
 		const columns = Object.keys(validated);

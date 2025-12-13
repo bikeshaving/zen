@@ -10,6 +10,7 @@ export {
 	table,
 	isTable,
 	type Table,
+	type PartialTable,
 	type TableOptions,
 	type ReferenceInfo,
 
