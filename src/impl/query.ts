@@ -4,7 +4,7 @@
  * Generates SELECT statements with prefixed column aliases for entity normalization.
  */
 
-import {type Table, isTable} from "./table.js";
+import {type Table, isTable, validateWithStandardSchema} from "./table.js";
 
 // ============================================================================
 // Types
@@ -363,8 +363,11 @@ export function buildEntityMap(
 			const key = entityKey(table.name, pk);
 
 			if (!entities.has(key)) {
-				// Parse through schema for type coercion (dates, numbers, etc.)
-				const parsed = table.schema.parse(data);
+				// Validate through Standard Schema for type coercion (dates, numbers, etc.)
+				const parsed = validateWithStandardSchema<Record<string, unknown>>(
+					table.schema,
+					data,
+				);
 				entities.set(key, parsed);
 			}
 		}

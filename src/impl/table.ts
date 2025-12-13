@@ -8,38 +8,59 @@
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 import {TableDefinitionError} from "./errors.js";
 import {createFragment, type SQLFragment} from "./query.js";
+import {ValidationError} from "./errors.js";
 
 // ============================================================================
-// Wrapper Types
+// Standard Schema Support
 // ============================================================================
 
-const DB_FIELD = Symbol.for("@b9g/zealot:field");
+/**
+ * Validate data using Standard Schema.
+ * All Zod schemas (v3.23+) implement the Standard Schema interface.
+ *
+ * @internal Used by table methods and database operations
+ */
+export function validateWithStandardSchema<T = unknown>(
+	schema: ZodObject<any>,
+	data: unknown,
+): T {
+	const standard = (schema as any)["~standard"];
+	const result = standard.validate(data);
 
-interface FieldWrapper<T extends ZodTypeAny = ZodTypeAny> {
-	[DB_FIELD]: true;
-	schema: T;
-	meta: FieldDbMeta;
+	if (result.issues) {
+		// Convert Standard Schema issues to ValidationError
+		throw new ValidationError(
+			"Validation failed",
+			result.issues.reduce(
+				(acc: Record<string, string[]>, issue: any) => {
+					const path = issue.path?.[0] ?? "_root";
+					if (!acc[String(path)]) acc[String(path)] = [];
+					acc[String(path)].push(issue.message);
+					return acc;
+				},
+				{} as Record<string, string[]>,
+			),
+		);
+	}
+
+	return result.value;
 }
 
-function isFieldWrapper(value: unknown): value is FieldWrapper {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		DB_FIELD in value &&
-		(value as any)[DB_FIELD] === true
-	);
-}
+// ============================================================================
+// Metadata Keys
+// ============================================================================
 
-function createWrapper<T extends ZodTypeAny>(
-	schema: T,
-	meta: FieldDbMeta,
-): FieldWrapper<T> {
-	return {
-		[DB_FIELD]: true,
-		schema,
-		meta,
-	};
-}
+/**
+ * Keys used in .meta() for Zealot field metadata.
+ * These are intentionally unnamespaced since table() consumes them.
+ */
+const META_KEYS = {
+	primary: "primary",
+	unique: "unique",
+	indexed: "indexed",
+	softDelete: "softDelete",
+	reference: "reference",
+} as const;
 
 // ============================================================================
 // Field Metadata
@@ -68,8 +89,9 @@ export interface FieldDbMeta {
  * @example
  * id: primary(z.string().uuid())
  */
-export function primary<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
-	return createWrapper(schema, {primaryKey: true});
+export function primary<T extends ZodTypeAny>(schema: T): T {
+	const existing = (schema as any).meta?.() || {};
+	return schema.meta({...existing, [META_KEYS.primary]: true}) as T;
 }
 
 /**
@@ -78,8 +100,9 @@ export function primary<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
  * @example
  * email: unique(z.string().email())
  */
-export function unique<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
-	return createWrapper(schema, {unique: true});
+export function unique<T extends ZodTypeAny>(schema: T): T {
+	const existing = (schema as any).meta?.() || {};
+	return schema.meta({...existing, [META_KEYS.unique]: true}) as T;
 }
 
 /**
@@ -88,8 +111,9 @@ export function unique<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
  * @example
  * createdAt: index(z.date())
  */
-export function index<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
-	return createWrapper(schema, {indexed: true});
+export function index<T extends ZodTypeAny>(schema: T): T {
+	const existing = (schema as any).meta?.() || {};
+	return schema.meta({...existing, [META_KEYS.indexed]: true}) as T;
 }
 
 /**
@@ -99,8 +123,9 @@ export function index<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
  * @example
  * deletedAt: softDelete(z.date().nullable())
  */
-export function softDelete<T extends ZodTypeAny>(schema: T): FieldWrapper<T> {
-	return createWrapper(schema, {softDelete: true});
+export function softDelete<T extends ZodTypeAny>(schema: T): T {
+	const existing = (schema as any).meta?.() || {};
+	return schema.meta({...existing, [META_KEYS.softDelete]: true}) as T;
 }
 
 /**
@@ -118,15 +143,17 @@ export function references<T extends ZodTypeAny>(
 		as: string;
 		onDelete?: "cascade" | "set null" | "restrict";
 	},
-): FieldWrapper<T> {
-	return createWrapper(schema, {
-		reference: {
+): T {
+	const existing = (schema as any).meta?.() || {};
+	return schema.meta({
+		...existing,
+		[META_KEYS.reference]: {
 			table,
 			field: options.field,
 			as: options.as,
 			onDelete: options.onDelete,
 		},
-	});
+	}) as T;
 }
 
 // ============================================================================
@@ -431,7 +458,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
  *   role: z.enum(["user", "admin"]).default("user"),
  * });
  */
-export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
+export function table<T extends Record<string, ZodTypeAny>>(
 	name: string,
 	shape: T,
 	options: TableOptions = {},
@@ -444,7 +471,7 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 		);
 	}
 
-	// Extract Zod schemas and metadata
+	// Extract Zod schemas and metadata from .meta()
 	const zodShape: Record<string, ZodTypeAny> = {};
 	const meta = {
 		primary: null as string | null,
@@ -464,47 +491,55 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 				key,
 			);
 		}
-		if (isFieldWrapper(value)) {
-			zodShape[key] = value.schema;
-			meta.fields[key] = value.meta;
 
-			if (value.meta.primaryKey) {
-				if (meta.primary !== null) {
-					throw new TableDefinitionError(
-						`Table "${name}" has multiple primary keys: "${meta.primary}" and "${key}". Only one primary key is allowed.`,
-						name,
-					);
-				}
-				meta.primary = key;
+		const fieldSchema = value as ZodTypeAny;
+		zodShape[key] = fieldSchema;
+
+		// Read metadata from .meta()
+		const fieldMeta = (fieldSchema as any).meta?.() || {};
+		const dbMeta: FieldDbMeta = {};
+
+		if (fieldMeta[META_KEYS.primary]) {
+			if (meta.primary !== null) {
+				throw new TableDefinitionError(
+					`Table "${name}" has multiple primary keys: "${meta.primary}" and "${key}". Only one primary key is allowed.`,
+					name,
+				);
 			}
-			if (value.meta.unique) {
-				meta.unique.push(key);
-			}
-			if (value.meta.indexed) {
-				meta.indexed.push(key);
-			}
-			if (value.meta.softDelete) {
-				if (meta.softDeleteField !== null) {
-					throw new TableDefinitionError(
-						`Table "${name}" has multiple soft delete fields: "${meta.softDeleteField}" and "${key}". Only one soft delete field is allowed.`,
-						name,
-					);
-				}
-				meta.softDeleteField = key;
-			}
-			if (value.meta.reference) {
-				const ref = value.meta.reference;
-				meta.references.push({
-					fieldName: key,
-					table: ref.table,
-					referencedField: ref.field ?? ref.table._meta.primary ?? "id",
-					as: ref.as,
-					onDelete: ref.onDelete,
-				});
-			}
-		} else {
-			zodShape[key] = value as ZodTypeAny;
+			meta.primary = key;
+			dbMeta.primaryKey = true;
 		}
+		if (fieldMeta[META_KEYS.unique]) {
+			meta.unique.push(key);
+			dbMeta.unique = true;
+		}
+		if (fieldMeta[META_KEYS.indexed]) {
+			meta.indexed.push(key);
+			dbMeta.indexed = true;
+		}
+		if (fieldMeta[META_KEYS.softDelete]) {
+			if (meta.softDeleteField !== null) {
+				throw new TableDefinitionError(
+					`Table "${name}" has multiple soft delete fields: "${meta.softDeleteField}" and "${key}". Only one soft delete field is allowed.`,
+					name,
+				);
+			}
+			meta.softDeleteField = key;
+			dbMeta.softDelete = true;
+		}
+		if (fieldMeta[META_KEYS.reference]) {
+			const ref = fieldMeta[META_KEYS.reference];
+			meta.references.push({
+				fieldName: key,
+				table: ref.table,
+				referencedField: ref.field ?? ref.table._meta.primary ?? "id",
+				as: ref.as,
+				onDelete: ref.onDelete,
+			});
+			dbMeta.reference = ref;
+		}
+
+		meta.fields[key] = dbMeta;
 	}
 
 	const schema = z.object(zodShape as any);
@@ -845,7 +880,7 @@ function createTableObject(
 			const tuples: string[] = [];
 
 			for (const row of rows) {
-				const validated = partialSchema.parse(row);
+				const validated = validateWithStandardSchema(partialSchema, row);
 				const rowPlaceholders: string[] = [];
 
 				for (const col of columns) {

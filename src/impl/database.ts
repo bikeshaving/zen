@@ -6,6 +6,7 @@
  */
 
 import type {Table, Infer, Insert} from "./table.js";
+import {validateWithStandardSchema} from "./table.js";
 import {
 	createQuery,
 	parseTemplate,
@@ -221,7 +222,9 @@ export class Transaction {
 				.get<
 					Record<string, unknown>
 				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
-				.then((row) => (row ? (table.schema.parse(row) as Infer<T>) : null));
+				.then((row) =>
+					row ? (validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>) : null,
+				);
 		}
 
 		// Tagged template query
@@ -251,9 +254,12 @@ export class Transaction {
 			);
 		}
 
-		const validated = table.schema.parse(data);
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			table.schema,
+			data,
+		);
 		const row = await this.#driver.insert(table.name, validated);
-		return table.schema.parse(row) as Infer<T>;
+		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
 	}
 
 	async update<T extends Table<any>>(
@@ -267,7 +273,10 @@ export class Transaction {
 		}
 
 		const partialSchema = table.schema.partial();
-		const validated = partialSchema.parse(data);
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			data,
+		);
 
 		const columns = Object.keys(validated);
 		if (columns.length === 0) {
@@ -276,7 +285,7 @@ export class Transaction {
 
 		const row = await this.#driver.update(table.name, pk, id, validated);
 		if (!row) return null;
-		return table.schema.parse(row) as Infer<T>;
+		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
 	}
 
 	async delete<T extends Table<any>>(
@@ -578,7 +587,9 @@ export class Database extends EventTarget {
 				.get<
 					Record<string, unknown>
 				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
-				.then((row) => (row ? (table.schema.parse(row) as Infer<T>) : null));
+				.then((row) =>
+					row ? (validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>) : null,
+				);
 		}
 
 		// Tagged template query
@@ -620,7 +631,10 @@ export class Database extends EventTarget {
 			);
 		}
 
-		const validated = table.schema.parse(data);
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			table.schema,
+			data,
+		);
 
 		const columns = Object.keys(validated);
 		const values = Object.values(validated);
@@ -634,7 +648,7 @@ export class Database extends EventTarget {
 		if (this.#driver.dialect !== "mysql") {
 			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
-			return table.schema.parse(row) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
 		}
 
 		// MySQL fallback: INSERT then SELECT
@@ -662,7 +676,10 @@ export class Database extends EventTarget {
 		}
 
 		const partialSchema = table.schema.partial();
-		const validated = partialSchema.parse(data);
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			data,
+		);
 
 		const columns = Object.keys(validated);
 		if (columns.length === 0) {
@@ -685,7 +702,7 @@ export class Database extends EventTarget {
 				id,
 			]);
 			if (!row) return null;
-			return table.schema.parse(row) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
 		}
 
 		// MySQL fallback: UPDATE then SELECT
@@ -697,7 +714,7 @@ export class Database extends EventTarget {
 			id,
 		]);
 		if (!row) return null;
-		return table.schema.parse(row) as Infer<T>;
+		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
 	}
 
 	/**

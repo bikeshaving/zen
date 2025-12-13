@@ -1,6 +1,6 @@
 # @b9g/zealot
 
-Zod-first SQL client and standard for TypeScript databases.
+Zod-to-SQL database client and standard for TypeScript databases.
 
 A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), query builders (Kysely), and raw client wrappers with a single SQL-first library built on Zod schemas and event-driven migrations.
 
