@@ -12,7 +12,6 @@ import {
 	normalize,
 	normalizeOne,
 	type SQLDialect,
-	type RawRow,
 } from "./query.js";
 
 // ============================================================================
@@ -22,9 +21,17 @@ import {
 /**
  * Database driver interface.
  *
- * Implement this interface to add support for different databases.
+ * Each driver implements this interface as a class with a specific name
+ * (e.g., SQLiteDriver, PostgresDriver) and is exported as the default export.
+ *
+ * Drivers own all SQL generation and dialect-specific behavior.
  */
-export interface DatabaseDriver {
+export interface Driver {
+	/**
+	 * SQL dialect for this driver.
+	 */
+	readonly dialect: SQLDialect;
+
 	/**
 	 * Execute a query and return all rows.
 	 */
@@ -53,54 +60,62 @@ export interface DatabaseDriver {
 
 	/**
 	 * Escape an identifier (table name, column name) for safe SQL interpolation.
-	 *
-	 * Each driver implements this using the underlying library's escaping,
-	 * ensuring proper handling of special characters for that dialect.
 	 */
 	escapeIdentifier(name: string): string;
 
 	/**
-	 * Begin a transaction and return a connection-bound driver.
-	 *
-	 * Optional — implement this for connection-pooled databases to ensure
-	 * all transaction operations use the same connection.
-	 *
-	 * If not implemented, Database.transaction() falls back to SQL-based
-	 * BEGIN/COMMIT/ROLLBACK which works for single-connection drivers.
+	 * Close the database connection.
 	 */
-	beginTransaction?(): Promise<TransactionDriver>;
+	close(): Promise<void>;
+
+	/**
+	 * Execute a function within a database transaction.
+	 *
+	 * Drivers implement this using their native transaction API to ensure
+	 * all operations use the same connection.
+	 *
+	 * If the function completes successfully, the transaction is committed.
+	 * If the function throws an error, the transaction is rolled back.
+	 */
+	transaction<T>(fn: () => Promise<T>): Promise<T>;
+
+	/**
+	 * Insert a row and return the full row (including DB defaults/generated values).
+	 *
+	 * @param tableName - The table name
+	 * @param data - Validated column-value pairs to insert
+	 * @returns The inserted row with all columns (including defaults)
+	 */
+	insert(
+		tableName: string,
+		data: Record<string, unknown>,
+	): Promise<Record<string, unknown>>;
+
+	/**
+	 * Update a row and return the updated row.
+	 *
+	 * @param tableName - The table name
+	 * @param primaryKey - The primary key column name
+	 * @param id - The primary key value
+	 * @param data - Validated column-value pairs to update
+	 * @returns The updated row, or null if not found
+	 */
+	update(
+		tableName: string,
+		primaryKey: string,
+		id: unknown,
+		data: Record<string, unknown>,
+	): Promise<Record<string, unknown> | null>;
 
 	/**
 	 * Execute a function while holding an exclusive migration lock.
 	 *
-	 * Each driver implements this using dialect-appropriate locking:
+	 * Optional — implement this using dialect-appropriate locking:
 	 * - PostgreSQL: pg_advisory_lock
 	 * - MySQL: GET_LOCK
-	 * - SQLite: BEGIN EXCLUSIVE (file-level lock)
-	 *
-	 * The lock prevents concurrent migration attempts across processes.
-	 * If not implemented, Database.open() falls back to SQL-based locking.
+	 * - SQLite: BEGIN EXCLUSIVE
 	 */
 	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
-}
-
-/**
- * A driver bound to a single connection within a transaction.
- *
- * All operations go through the same connection until commit/rollback.
- */
-export interface TransactionDriver extends DatabaseDriver {
-	commit(): Promise<void>;
-	rollback(): Promise<void>;
-}
-
-/**
- * Result of creating a database adapter.
- * Includes the driver and a close function for cleanup.
- */
-export interface DatabaseAdapter {
-	driver: DatabaseDriver;
-	close(): Promise<void>;
 }
 
 // ============================================================================
@@ -144,10 +159,6 @@ export class DatabaseUpgradeEvent extends Event {
 // Transaction
 // ============================================================================
 
-export interface DatabaseOptions {
-	dialect?: SQLDialect;
-}
-
 /**
  * Tagged template query function that returns normalized entities.
  */
@@ -163,12 +174,10 @@ export type TaggedQuery<T> = (
  * connection for the duration of the transaction.
  */
 export class Transaction {
-	#driver: DatabaseDriver;
-	#dialect: SQLDialect;
+	#driver: Driver;
 
-	constructor(driver: DatabaseDriver, dialect: SQLDialect) {
+	constructor(driver: Driver) {
 		this.#driver = driver;
-		this.#dialect = dialect;
 	}
 
 	// ==========================================================================
@@ -178,7 +187,10 @@ export class Transaction {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tableArray as Table<any>[], this.#dialect);
+			const query = createQuery(
+				tableArray as Table<any>[],
+				this.#driver.dialect,
+			);
 			const {sql, params} = query(strings, ...values);
 			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
@@ -215,7 +227,10 @@ export class Transaction {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tableArray as Table<any>[], this.#dialect);
+			const query = createQuery(
+				tableArray as Table<any>[],
+				this.#driver.dialect,
+			);
 			const {sql, params} = query(strings, ...values);
 			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
@@ -237,26 +252,8 @@ export class Transaction {
 		}
 
 		const validated = table.schema.parse(data);
-
-		const columns = Object.keys(validated);
-		const values = Object.values(validated);
-		const tableName = this.#quoteIdent(table.name);
-		const columnList = columns.map((c) => this.#quoteIdent(c)).join(", ");
-		const placeholders = columns
-			.map((_, i) => this.#placeholder(i + 1))
-			.join(", ");
-
-		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
-		if (this.#dialect !== "mysql") {
-			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
-			return table.schema.parse(row) as Infer<T>;
-		}
-
-		// MySQL fallback: INSERT then SELECT
-		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders})`;
-		await this.#driver.run(sql, values);
-		return validated as Infer<T>;
+		const row = await this.#driver.insert(table.name, validated);
+		return table.schema.parse(row) as Infer<T>;
 	}
 
 	async update<T extends Table<any>>(
@@ -277,33 +274,7 @@ export class Transaction {
 			throw new Error("No fields to update");
 		}
 
-		const values = Object.values(validated);
-		const tableName = this.#quoteIdent(table.name);
-		const setClause = columns
-			.map((c, i) => `${this.#quoteIdent(c)} = ${this.#placeholder(i + 1)}`)
-			.join(", ");
-
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(values.length + 1)}`;
-
-		// Use RETURNING for SQLite/PostgreSQL
-		if (this.#dialect !== "mysql") {
-			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [
-				...values,
-				id,
-			]);
-			if (!row) return null;
-			return table.schema.parse(row) as Infer<T>;
-		}
-
-		// MySQL fallback: UPDATE then SELECT
-		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		await this.#driver.run(sql, [...values, id]);
-
-		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
-			id,
-		]);
+		const row = await this.#driver.update(table.name, pk, id, validated);
 		if (!row) return null;
 		return table.schema.parse(row) as Infer<T>;
 	}
@@ -334,7 +305,7 @@ export class Transaction {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T[]> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.all<T>(sql, params);
 	}
 
@@ -342,7 +313,7 @@ export class Transaction {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<number> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.run(sql, params);
 	}
 
@@ -350,7 +321,7 @@ export class Transaction {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
 	}
 
@@ -363,7 +334,7 @@ export class Transaction {
 	}
 
 	#placeholder(index: number): string {
-		if (this.#dialect === "postgresql") {
+		if (this.#driver.dialect === "postgresql") {
 			return `$${index}`;
 		}
 		return "?";
@@ -388,15 +359,13 @@ export class Transaction {
  * await db.open(2);
  */
 export class Database extends EventTarget {
-	#driver: DatabaseDriver;
-	#dialect: SQLDialect;
+	#driver: Driver;
 	#version: number = 0;
 	#opened: boolean = false;
 
-	constructor(driver: DatabaseDriver, options: DatabaseOptions = {}) {
+	constructor(driver: Driver) {
 		super();
 		this.#driver = driver;
-		this.#dialect = options.dialect ?? "sqlite";
 	}
 
 	/**
@@ -455,9 +424,9 @@ export class Database extends EventTarget {
 			// SQLite: BEGIN IMMEDIATE acquires write lock upfront
 			// PostgreSQL/MySQL: relies on SELECT FOR UPDATE in #getCurrentVersionLocked
 			const beginSQL =
-				this.#dialect === "sqlite"
+				this.#driver.dialect === "sqlite"
 					? "BEGIN IMMEDIATE"
-					: this.#dialect === "mysql"
+					: this.#driver.dialect === "mysql"
 						? "START TRANSACTION"
 						: "BEGIN";
 
@@ -482,7 +451,7 @@ export class Database extends EventTarget {
 
 	async #ensureMigrationsTable(): Promise<void> {
 		const timestampCol =
-			this.#dialect === "mysql"
+			this.#driver.dialect === "mysql"
 				? "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
 				: "applied_at TEXT DEFAULT CURRENT_TIMESTAMP";
 
@@ -533,7 +502,10 @@ export class Database extends EventTarget {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tableArray as Table<any>[], this.#dialect);
+			const query = createQuery(
+				tableArray as Table<any>[],
+				this.#driver.dialect,
+			);
 			const {sql, params} = query(strings, ...values);
 			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
@@ -586,7 +558,10 @@ export class Database extends EventTarget {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(tableArray as Table<any>[], this.#dialect);
+			const query = createQuery(
+				tableArray as Table<any>[],
+				this.#driver.dialect,
+			);
 			const {sql, params} = query(strings, ...values);
 			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
@@ -630,7 +605,7 @@ export class Database extends EventTarget {
 			.join(", ");
 
 		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
-		if (this.#dialect !== "mysql") {
+		if (this.#driver.dialect !== "mysql") {
 			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
 			return table.schema.parse(row) as Infer<T>;
@@ -677,7 +652,7 @@ export class Database extends EventTarget {
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(values.length + 1)}`;
 
 		// Use RETURNING for SQLite/PostgreSQL
-		if (this.#dialect !== "mysql") {
+		if (this.#driver.dialect !== "mysql") {
 			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, [
 				...values,
@@ -739,7 +714,7 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T[]> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.all<T>(sql, params);
 	}
 
@@ -753,7 +728,7 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<number> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.run(sql, params);
 	}
 
@@ -767,7 +742,7 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T> {
-		const {sql, params} = parseTemplate(strings, values, this.#dialect);
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
 	}
 
@@ -792,32 +767,11 @@ export class Database extends EventTarget {
 	 * });
 	 */
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-		// Use driver's transaction support if available (for connection pools)
-		if (this.#driver.beginTransaction) {
-			const txDriver = await this.#driver.beginTransaction();
-			const tx = new Transaction(txDriver, this.#dialect);
-			try {
-				const result = await fn(tx);
-				await txDriver.commit();
-				return result;
-			} catch (error) {
-				await txDriver.rollback();
-				throw error;
-			}
-		}
-
-		// Fallback: SQL-based transactions (for single-connection drivers)
-		const begin = this.#dialect === "mysql" ? "START TRANSACTION" : "BEGIN";
-		await this.#driver.run(begin, []);
-		const tx = new Transaction(this.#driver, this.#dialect);
-		try {
-			const result = await fn(tx);
-			await this.#driver.run("COMMIT", []);
-			return result;
-		} catch (error) {
-			await this.#driver.run("ROLLBACK", []);
-			throw error;
-		}
+		// Delegate to driver.transaction() which handles dialect-specific behavior
+		return await this.#driver.transaction(async () => {
+			const tx = new Transaction(this.#driver);
+			return await fn(tx);
+		});
 	}
 
 	// ==========================================================================
@@ -829,7 +783,7 @@ export class Database extends EventTarget {
 	}
 
 	#placeholder(index: number): string {
-		if (this.#dialect === "postgresql") {
+		if (this.#driver.dialect === "postgresql") {
 			return `$${index}`;
 		}
 		return "?";

@@ -1,7 +1,7 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, primary, unique, references} from "./table.js";
-import {Database, type DatabaseDriver} from "./database.js";
+import {Database, type Driver} from "./database.js";
 
 // Test UUIDs (RFC 4122 compliant - version 4, variant 1)
 const USER_ID = "11111111-1111-4111-a111-111111111111";
@@ -25,23 +25,30 @@ const Posts = table("posts", {
 // Mock driver factory (default: SQLite-style escaping)
 function createMockDriver(
 	dialect: "sqlite" | "mysql" | "postgresql" = "sqlite",
-): DatabaseDriver {
+): Driver {
 	return {
-		all: mock(async () => []) as DatabaseDriver["all"],
-		get: mock(async () => null) as DatabaseDriver["get"],
-		run: mock(async () => 1) as DatabaseDriver["run"],
-		val: mock(async () => 0) as DatabaseDriver["val"],
+		dialect: dialect,
+		all: mock(async () => []) as Driver["all"],
+		get: mock(async () => null) as Driver["get"],
+		run: mock(async () => 1) as Driver["run"],
+		val: mock(async () => 0) as Driver["val"],
 		escapeIdentifier: (name: string) => {
 			if (dialect === "mysql") {
 				return `\`${name.replace(/`/g, "``")}\``;
 			}
 			return `"${name.replace(/"/g, '""')}"`;
 		},
+		close: mock(async () => {}),
+		transaction: mock(async (fn) => await fn()) as Driver["transaction"],
+		insert: mock(async (_tableName, data) => data) as Driver["insert"],
+		update: mock(
+			async (_tableName, _pk, _id, data) => data,
+		) as Driver["update"],
 	};
 }
 
 describe("Database", () => {
-	let driver: DatabaseDriver;
+	let driver: Driver;
 	let db: Database;
 
 	beforeEach(() => {
@@ -312,8 +319,8 @@ describe("Database", () => {
 
 describe("PostgreSQL dialect", () => {
 	test("uses numbered placeholders", async () => {
-		const driver = createMockDriver();
-		const db = new Database(driver, {dialect: "postgresql"});
+		const driver = createMockDriver("postgresql");
+		const db = new Database(driver);
 
 		await db.query`SELECT * FROM users WHERE id = ${USER_ID} AND active = ${true}`;
 
@@ -327,7 +334,7 @@ describe("PostgreSQL dialect", () => {
 describe("MySQL dialect", () => {
 	test("uses backtick quoting", async () => {
 		const driver = createMockDriver("mysql");
-		const db = new Database(driver, {dialect: "mysql"});
+		const db = new Database(driver);
 
 		await db.insert(Users, {
 			id: USER_ID,
@@ -360,12 +367,10 @@ describe("escapeIdentifier", () => {
 describe("transaction()", () => {
 	test("commits on success", async () => {
 		const driver = createMockDriver();
-		// Mock RETURNING result for insert
-		(driver.get as any).mockImplementation(async () => ({
-			id: USER_ID,
-			email: "alice@example.com",
-			name: "Alice",
-		}));
+		// Mock insert result
+		(driver.insert as any).mockImplementation(
+			async (_tableName: string, data: any) => data,
+		);
 		const db = new Database(driver);
 
 		const result = await db.transaction(async (tx) => {
@@ -379,27 +384,19 @@ describe("transaction()", () => {
 
 		expect(result).toBe("done");
 
-		// Check BEGIN was called
-		const runCalls = (driver.run as any).mock.calls;
-		expect(runCalls[0][0]).toBe("BEGIN");
+		// Check driver.transaction was called
+		expect((driver.transaction as any).mock.calls.length).toBe(1);
 
-		// Check INSERT used RETURNING (via driver.get)
-		const getCalls = (driver.get as any).mock.calls;
-		expect(getCalls[0][0]).toContain("INSERT INTO");
-		expect(getCalls[0][0]).toContain("RETURNING *");
-
-		// Check COMMIT was called
-		expect(runCalls[1][0]).toBe("COMMIT");
+		// Check INSERT was called via driver.insert
+		expect((driver.insert as any).mock.calls.length).toBe(1);
 	});
 
 	test("rollbacks on error", async () => {
 		const driver = createMockDriver();
-		// Mock RETURNING result for insert
-		(driver.get as any).mockImplementation(async () => ({
-			id: USER_ID,
-			email: "alice@example.com",
-			name: "Alice",
-		}));
+		// Mock insert result
+		(driver.insert as any).mockImplementation(
+			async (_tableName: string, data: any) => data,
+		);
 		const db = new Database(driver);
 
 		const error = new Error("Test error");
@@ -414,16 +411,8 @@ describe("transaction()", () => {
 			}),
 		).rejects.toThrow("Test error");
 
-		// Check BEGIN was called
-		const runCalls = (driver.run as any).mock.calls;
-		expect(runCalls[0][0]).toBe("BEGIN");
-
-		// Check INSERT used RETURNING (via driver.get)
-		const getCalls = (driver.get as any).mock.calls;
-		expect(getCalls[0][0]).toContain("INSERT INTO");
-
-		// Check ROLLBACK was called (not COMMIT)
-		expect(runCalls[1][0]).toBe("ROLLBACK");
+		// Check driver.transaction was called and it propagated the error
+		expect((driver.transaction as any).mock.calls.length).toBe(1);
 	});
 
 	test("returns value from transaction function", async () => {
@@ -435,83 +424,5 @@ describe("transaction()", () => {
 		});
 
 		expect(result).toEqual({id: USER_ID, name: "Alice"});
-	});
-
-	test("uses START TRANSACTION for MySQL", async () => {
-		const driver = createMockDriver();
-		const db = new Database(driver, {dialect: "mysql"});
-
-		await db.transaction(async () => {
-			return "done";
-		});
-
-		const calls = (driver.run as any).mock.calls;
-		expect(calls[0][0]).toBe("START TRANSACTION");
-	});
-
-	test("uses driver.beginTransaction() when available", async () => {
-		const txDriver = {
-			...createMockDriver(),
-			commit: mock(async () => {}),
-			rollback: mock(async () => {}),
-		};
-		// Mock RETURNING result
-		(txDriver.get as any).mockImplementation(async () => ({
-			id: USER_ID,
-			email: "alice@example.com",
-			name: "Alice",
-		}));
-		const driver = {
-			...createMockDriver(),
-			beginTransaction: mock(async () => txDriver),
-		};
-		const db = new Database(driver);
-
-		await db.transaction(async (tx) => {
-			await tx.insert(Users, {
-				id: USER_ID,
-				email: "alice@example.com",
-				name: "Alice",
-			});
-			return "done";
-		});
-
-		// Should use driver's beginTransaction
-		expect(driver.beginTransaction).toHaveBeenCalled();
-
-		// INSERT with RETURNING should go through txDriver.get
-		expect((txDriver.get as any).mock.calls.length).toBe(1);
-		expect((txDriver.get as any).mock.calls[0][0]).toContain("INSERT INTO");
-		expect((txDriver.get as any).mock.calls[0][0]).toContain("RETURNING *");
-
-		// Should commit via txDriver
-		expect(txDriver.commit).toHaveBeenCalled();
-		expect(txDriver.rollback).not.toHaveBeenCalled();
-
-		// Main driver should NOT have BEGIN/COMMIT
-		const mainCalls = (driver.run as any).mock.calls;
-		expect(mainCalls.some((c: any) => c[0] === "BEGIN")).toBe(false);
-	});
-
-	test("uses driver.rollback() on error when beginTransaction available", async () => {
-		const txDriver = {
-			...createMockDriver(),
-			commit: mock(async () => {}),
-			rollback: mock(async () => {}),
-		};
-		const driver = {
-			...createMockDriver(),
-			beginTransaction: mock(async () => txDriver),
-		};
-		const db = new Database(driver);
-
-		await expect(
-			db.transaction(async () => {
-				throw new Error("Test error");
-			}),
-		).rejects.toThrow("Test error");
-
-		expect(txDriver.rollback).toHaveBeenCalled();
-		expect(txDriver.commit).not.toHaveBeenCalled();
 	});
 });

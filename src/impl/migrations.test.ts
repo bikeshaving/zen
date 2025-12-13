@@ -1,15 +1,12 @@
 import {test, expect, describe, mock} from "bun:test";
-import {
-	Database,
-	DatabaseUpgradeEvent,
-	type DatabaseDriver,
-} from "./database.js";
+import {Database, DatabaseUpgradeEvent, type Driver} from "./database.js";
 
 // In-memory SQLite-like driver for testing
-function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
+function createTestDriver(): Driver & {tables: Map<string, any[]>} {
 	const tables = new Map<string, any[]>();
 
 	return {
+		dialect: "sqlite" as const,
 		tables,
 		async all<T>(sql: string, _params: unknown[]): Promise<T[]> {
 			// Simple mock - just handle _migrations table
@@ -22,7 +19,7 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 			if (sql.includes("MAX(version)")) {
 				const migrations = tables.get("_migrations") ?? [];
 				if (migrations.length === 0) return {version: null} as T;
-				const maxVersion = Math.max(...migrations.map((m) => m.version));
+				const maxVersion = Math.max(...migrations.map((m: any) => m.version));
 				return {version: maxVersion} as T;
 			}
 			return null;
@@ -56,6 +53,24 @@ function createTestDriver(): DatabaseDriver & {tables: Map<string, any[]>} {
 		},
 		escapeIdentifier(name: string): string {
 			return `"${name.replace(/"/g, '""')}"`;
+		},
+		async close(): Promise<void> {
+			// No-op for test driver
+		},
+		async transaction<T>(fn: () => Promise<T>): Promise<T> {
+			// Simple transaction - just execute the function
+			return await fn();
+		},
+		async insert(_tableName: string, data: Record<string, unknown>) {
+			return data;
+		},
+		async update(
+			_tableName: string,
+			_pk: string,
+			_id: unknown,
+			data: Record<string, unknown>,
+		) {
+			return data;
 		},
 	};
 }
@@ -262,7 +277,7 @@ describe("Database migrations", () => {
 			await db.open(3);
 
 			const migrations = driver.tables.get("_migrations")!;
-			expect(migrations.some((m) => m.version === 3)).toBe(true);
+			expect(migrations.some((m: any) => m.version === 3)).toBe(true);
 		});
 
 		test("version not recorded if migration fails", async () => {
@@ -282,7 +297,7 @@ describe("Database migrations", () => {
 			}
 
 			const migrations = driver.tables.get("_migrations") ?? [];
-			expect(migrations.some((m) => m.version === 2)).toBe(false);
+			expect(migrations.some((m: any) => m.version === 2)).toBe(false);
 		});
 	});
 });

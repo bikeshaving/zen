@@ -1,21 +1,14 @@
 /**
  * mysql2 adapter for @b9g/zealot
  *
- * Creates a DatabaseDriver from mysql2 connection pool.
+ * Provides a Driver implementation for mysql2.
  * Uses connection pooling - call close() when done to end all connections.
  *
  * Requires: mysql2
  */
 
-import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "./zealot.js";
+import type {Driver} from "./zealot.js";
 import mysql from "mysql2/promise";
-
-export type {DatabaseAdapter};
-
-/**
- * SQL dialect for this adapter.
- */
-export const dialect: SQLDialect = "mysql";
 
 /**
  * Options for the mysql adapter.
@@ -30,18 +23,14 @@ export interface MySQLOptions {
 }
 
 /**
- * Create a DatabaseDriver from a mysql2 connection pool.
- *
- * @param url - MySQL connection URL
- * @param options - Connection pool options
- * @returns DatabaseAdapter with driver and close function
+ * MySQL driver using mysql2.
  *
  * @example
- * import { createDriver, dialect } from "@b9g/zealot/mysql";
- * import { Database } from "@b9g/zealot";
+ * import MySQLDriver from "@b9g/zealot/mysql";
+ * import {Database} from "@b9g/zealot";
  *
- * const { driver, close } = createDriver("mysql://localhost/mydb");
- * const db = new Database(driver, { dialect });
+ * const driver = new MySQLDriver("mysql://localhost/mydb");
+ * const db = new Database(driver);
  *
  * db.addEventListener("upgradeneeded", (e) => {
  *   e.waitUntil(runMigrations(e));
@@ -50,77 +39,137 @@ export interface MySQLOptions {
  * await db.open(1);
  *
  * // When done:
- * await close();
+ * await driver.close();
  */
-export function createDriver(
-	url: string,
-	options: MySQLOptions = {},
-): DatabaseAdapter {
-	const pool = mysql.createPool({
-		uri: url,
-		connectionLimit: options.connectionLimit ?? 10,
-		idleTimeout: options.idleTimeout ?? 60000,
-		connectTimeout: options.connectTimeout ?? 10000,
-	});
+export default class MySQLDriver implements Driver {
+	readonly dialect = "mysql" as const;
+	#pool: mysql.Pool;
 
-	const driver: DatabaseDriver = {
-		async all<T>(sql: string, params: unknown[]): Promise<T[]> {
-			const [rows] = await pool.execute(sql, params);
-			return rows as T[];
-		},
+	constructor(url: string, options: MySQLOptions = {}) {
+		this.#pool = mysql.createPool({
+			uri: url,
+			connectionLimit: options.connectionLimit ?? 10,
+			idleTimeout: options.idleTimeout ?? 60000,
+			connectTimeout: options.connectTimeout ?? 10000,
+		});
+	}
 
-		async get<T>(sql: string, params: unknown[]): Promise<T | null> {
-			const [rows] = await pool.execute(sql, params);
-			return ((rows as unknown[])[0] as T) ?? null;
-		},
+	async all<T>(sql: string, params: unknown[]): Promise<T[]> {
+		const [rows] = await this.#pool.execute(sql, params);
+		return rows as T[];
+	}
 
-		async run(sql: string, params: unknown[]): Promise<number> {
-			const [result] = await pool.execute(sql, params);
-			return (result as mysql.ResultSetHeader).affectedRows ?? 0;
-		},
+	async get<T>(sql: string, params: unknown[]): Promise<T | null> {
+		const [rows] = await this.#pool.execute(sql, params);
+		return ((rows as unknown[])[0] as T) ?? null;
+	}
 
-		async val<T>(sql: string, params: unknown[]): Promise<T> {
-			const [rows] = await pool.execute(sql, params);
-			const row = (rows as unknown[])[0];
-			if (!row) return null as T;
-			const values = Object.values(row as object);
-			return values[0] as T;
-		},
+	async run(sql: string, params: unknown[]): Promise<number> {
+		const [result] = await this.#pool.execute(sql, params);
+		return (result as mysql.ResultSetHeader).affectedRows ?? 0;
+	}
 
-		escapeIdentifier(name: string): string {
-			// MySQL: wrap in backticks, double any embedded backticks
-			return `\`${name.replace(/`/g, "``")}\``;
-		},
+	async val<T>(sql: string, params: unknown[]): Promise<T> {
+		const [rows] = await this.#pool.execute(sql, params);
+		const row = (rows as unknown[])[0];
+		if (!row) return null as T;
+		const values = Object.values(row as object);
+		return values[0] as T;
+	}
 
-		async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
-			// Use MySQL named lock for migrations
-			// Timeout of 10 seconds to acquire lock
-			const LOCK_NAME = "zealot_migration";
-			const LOCK_TIMEOUT = 10;
+	escapeIdentifier(name: string): string {
+		// MySQL: wrap in backticks, double any embedded backticks
+		return `\`${name.replace(/`/g, "``")}\``;
+	}
 
-			const [lockResult] = await pool.execute(`SELECT GET_LOCK(?, ?)`, [
-				LOCK_NAME,
-				LOCK_TIMEOUT,
-			]);
-			const acquired = (lockResult as any[])[0]?.["GET_LOCK(?, ?)"] === 1;
+	async close(): Promise<void> {
+		await this.#pool.end();
+	}
 
-			if (!acquired) {
-				throw new Error(
-					`Failed to acquire migration lock after ${LOCK_TIMEOUT}s. Another migration may be in progress.`,
-				);
-			}
+	async transaction<T>(fn: () => Promise<T>): Promise<T> {
+		// mysql2: get a dedicated connection from pool for transaction
+		const connection = await this.#pool.getConnection();
+		try {
+			await connection.execute("START TRANSACTION", []);
+			const result = await fn();
+			await connection.execute("COMMIT", []);
+			return result;
+		} catch (error) {
+			await connection.execute("ROLLBACK", []);
+			throw error;
+		} finally {
+			connection.release();
+		}
+	}
 
-			try {
-				return await fn();
-			} finally {
-				await pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
-			}
-		},
-	};
+	async insert(
+		tableName: string,
+		data: Record<string, unknown>,
+	): Promise<Record<string, unknown>> {
+		const columns = Object.keys(data);
+		const values = Object.values(data);
+		const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+		const placeholders = columns.map(() => "?").join(", ");
 
-	const close = async (): Promise<void> => {
-		await pool.end();
-	};
+		// MySQL doesn't support RETURNING - need to INSERT then SELECT
+		const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
+		await this.#pool.execute(insertSql, values);
 
-	return {driver, close};
+		// Get the inserted row using LAST_INSERT_ID() if there's an auto-increment
+		// For now, just return the data as-is (caller should handle defaults)
+		// TODO: This is a limitation - MySQL doesn't give us DB defaults easily
+		return data;
+	}
+
+	async update(
+		tableName: string,
+		primaryKey: string,
+		id: unknown,
+		data: Record<string, unknown>,
+	): Promise<Record<string, unknown> | null> {
+		const columns = Object.keys(data);
+		const values = Object.values(data);
+		const setClause = columns
+			.map((c) => `${this.escapeIdentifier(c)} = ?`)
+			.join(", ");
+
+		// MySQL doesn't support RETURNING - need to UPDATE then SELECT
+		const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+		const [result] = await this.#pool.execute(updateSql, [...values, id]);
+
+		// Check if row was updated
+		if ((result as mysql.ResultSetHeader).affectedRows === 0) {
+			return null;
+		}
+
+		// SELECT the updated row
+		const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+		const [rows] = await this.#pool.execute(selectSql, [id]);
+		return (rows as unknown[])[0] as Record<string, unknown>;
+	}
+
+	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+		// Use MySQL named lock for migrations
+		// Timeout of 10 seconds to acquire lock
+		const LOCK_NAME = "zealot_migration";
+		const LOCK_TIMEOUT = 10;
+
+		const [lockResult] = await this.#pool.execute(`SELECT GET_LOCK(?, ?)`, [
+			LOCK_NAME,
+			LOCK_TIMEOUT,
+		]);
+		const acquired = (lockResult as any[])[0]?.["GET_LOCK(?, ?)"] === 1;
+
+		if (!acquired) {
+			throw new Error(
+				`Failed to acquire migration lock after ${LOCK_TIMEOUT}s. Another migration may be in progress.`,
+			);
+		}
+
+		try {
+			return await fn();
+		} finally {
+			await this.#pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
+		}
+	}
 }

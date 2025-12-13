@@ -55,10 +55,7 @@ export {
 	Database,
 	Transaction,
 	DatabaseUpgradeEvent,
-	type DatabaseAdapter,
-	type DatabaseDriver,
-	type TransactionDriver,
-	type DatabaseOptions,
+	type Driver,
 	type TaggedQuery,
 } from "./impl/database.js";
 
