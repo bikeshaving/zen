@@ -1,11 +1,14 @@
 /**
- * @b9g/zealot-sqlite - better-sqlite3 adapter for @b9g/zealot
+ * better-sqlite3 adapter for @b9g/zealot
  *
  * Creates a DatabaseDriver from better-sqlite3 (Node.js).
  * The connection is persistent - call close() when done.
+ *
+ * Requires: better-sqlite3
  */
 
-import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "@b9g/zealot";
+import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
+import type {SQLDialect} from "../query.js";
 import Database from "better-sqlite3";
 
 export type {DatabaseAdapter};
@@ -22,11 +25,11 @@ export const dialect: SQLDialect = "sqlite";
  * @returns DatabaseAdapter with driver and close function
  *
  * @example
- * import { createDriver } from "@b9g/zealot-sqlite";
- * import { Database as DB } from "@b9g/zealot";
+ * import { createDriver, dialect } from "@b9g/zealot/sqlite";
+ * import { Database } from "@b9g/zealot";
  *
  * const { driver, close } = createDriver("file:app.db");
- * const db = new DB(driver);
+ * const db = new Database(driver, { dialect });
  *
  * db.addEventListener("upgradeneeded", (e) => {
  *   e.waitUntil(runMigrations(e));

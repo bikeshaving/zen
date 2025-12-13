@@ -1,11 +1,14 @@
 /**
- * @b9g/zealot-mysql - mysql2 adapter for @b9g/zealot
+ * mysql2 adapter for @b9g/zealot
  *
  * Creates a DatabaseDriver from mysql2 connection pool.
  * Uses connection pooling - call close() when done to end all connections.
+ *
+ * Requires: mysql2
  */
 
-import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "@b9g/zealot";
+import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
+import type {SQLDialect} from "../query.js";
 import mysql from "mysql2/promise";
 
 export type {DatabaseAdapter};
@@ -35,11 +38,11 @@ export interface MySQLOptions {
  * @returns DatabaseAdapter with driver and close function
  *
  * @example
- * import { createDriver } from "@b9g/zealot-mysql";
+ * import { createDriver, dialect } from "@b9g/zealot/mysql";
  * import { Database } from "@b9g/zealot";
  *
  * const { driver, close } = createDriver("mysql://localhost/mydb");
- * const db = new Database(driver, { dialect: "mysql" });
+ * const db = new Database(driver, { dialect });
  *
  * db.addEventListener("upgradeneeded", (e) => {
  *   e.waitUntil(runMigrations(e));

@@ -6,8 +6,8 @@
  */
 
 import {SQL} from "bun";
-import type {DatabaseAdapter, DatabaseDriver} from "./database.js";
-import type {SQLDialect} from "./query.js";
+import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
+import type {SQLDialect} from "../query.js";
 
 export type {DatabaseAdapter};
 
@@ -40,7 +40,7 @@ function detectDialect(url: string): SQLDialect {
  * @returns DatabaseAdapter with driver, close function, and detected dialect
  *
  * @example
- * import { createDriver } from "@b9g/zealot/bun-sql";
+ * import { createDriver } from "@b9g/zealot/bun";
  * import { Database } from "@b9g/zealot";
  *
  * const { driver, close, dialect } = createDriver("postgres://localhost/mydb");

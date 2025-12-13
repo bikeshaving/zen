@@ -1,11 +1,14 @@
 /**
- * @b9g/zealot-postgres - postgres.js adapter for @b9g/zealot
+ * postgres.js adapter for @b9g/zealot
  *
  * Creates a DatabaseDriver from postgres.js.
  * Uses connection pooling - call close() when done to end all connections.
+ *
+ * Requires: postgres
  */
 
-import type {DatabaseAdapter, DatabaseDriver, SQLDialect} from "@b9g/zealot";
+import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
+import type {SQLDialect} from "../query.js";
 import postgres from "postgres";
 
 export type {DatabaseAdapter};
@@ -35,11 +38,11 @@ export interface PostgresOptions {
  * @returns DatabaseAdapter with driver and close function
  *
  * @example
- * import { createDriver } from "@b9g/zealot-postgres";
+ * import { createDriver, dialect } from "@b9g/zealot/postgres";
  * import { Database } from "@b9g/zealot";
  *
  * const { driver, close } = createDriver("postgresql://localhost/mydb");
- * const db = new Database(driver, { dialect: "postgresql" });
+ * const db = new Database(driver, { dialect });
  *
  * db.addEventListener("upgradeneeded", (e) => {
  *   e.waitUntil(runMigrations(e));

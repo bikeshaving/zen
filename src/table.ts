@@ -602,19 +602,19 @@ function createTableObject(
 			return meta.references;
 		},
 
-		pick(...fields: string[]): PartialTable<any> {
-			const fieldSet = new Set(fields);
+		pick(...fields: any[]): PartialTable<any> {
+			const fieldSet = new Set(fields as string[]);
 
 			// Pick the schema fields
 			const pickObj: Record<string, true> = {};
-			for (const f of fields) {
+			for (const f of fields as string[]) {
 				pickObj[f] = true;
 			}
 			const pickedSchema = schema.pick(pickObj);
 
 			// Filter zodShape to only picked fields
 			const pickedZodShape: Record<string, ZodTypeAny> = {};
-			for (const f of fields) {
+			for (const f of fields as string[]) {
 				if (f in zodShape) {
 					pickedZodShape[f] = zodShape[f];
 				}
