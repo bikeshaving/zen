@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, references} from "./table.js";
+import {table, extendZod} from "./table.js";
 import {
 	buildSelectColumns,
 	parseTemplate,
@@ -9,20 +9,21 @@ import {
 	rawQuery,
 } from "./query.js";
 
+// Extend Zod once before tests
+extendZod(z);
+
 // Test tables
 const users = table("users", {
-	id: primary(z.string().uuid()),
-	email: unique(z.string().email()),
-	name: z.string(),
-});
+	id: z.string().uuid().db.primary(),
+	email: z.string().email().db.unique(),
+	name: z.string()});
 
 const posts = table("posts", {
-	id: primary(z.string().uuid()),
-	authorId: references(z.string().uuid(), users, {as: "author"}),
+	id: z.string().uuid().db.primary(),
+	authorId: z.string().uuid().db.references(users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
-	published: z.boolean().default(false),
-});
+	published: z.boolean().default(false)});
 
 describe("buildSelectColumns", () => {
 	test("single table", () => {

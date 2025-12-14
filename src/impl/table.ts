@@ -6,6 +6,7 @@
  */
 
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
+
 import {TableDefinitionError} from "./errors.js";
 import {createFragment, type SQLFragment, createDDLFragment, type DDLFragment} from "./query.js";
 import {ValidationError} from "./errors.js";
@@ -159,101 +160,159 @@ export interface FieldDbMeta {
 		as: string;
 		onDelete?: "cascade" | "set null" | "restrict";
 	};
+	encode?: (value: any) => any;
+	decode?: (value: any) => any;
 }
 
 // ============================================================================
-// Field Wrappers
+// .db namespace - Fluent API for database metadata
 // ============================================================================
 
 /**
- * Mark a field as the primary key.
- *
- * @example
- * id: primary(z.string().uuid())
+ * Create the .db methods object that will be added to all Zod schemas.
+ * This is shared across all types and bound to the schema instance.
  */
-export function primary<T extends ZodTypeAny>(schema: T): T {
-	return setDBMeta(schema, {primary: true});
+function createDbMethods(schema: ZodTypeAny) {
+	return {
+			/**
+			 * Mark field as primary key.
+			 * @example z.string().uuid().db.primary()
+			 */
+			primary() {
+				return setDBMeta(schema, {primary: true});
+			},
+
+			/**
+			 * Mark field as unique.
+			 * @example z.string().email().db.unique()
+			 */
+			unique() {
+				return setDBMeta(schema, {unique: true});
+			},
+
+			/**
+			 * Create an index on this field.
+			 * @example z.date().db.index()
+			 */
+			index() {
+				return setDBMeta(schema, {indexed: true});
+			},
+
+			/**
+			 * Mark field as soft delete timestamp.
+			 * @example z.date().nullable().default(null).db.softDelete()
+			 */
+			softDelete() {
+				return setDBMeta(schema, {softDelete: true});
+			},
+
+			/**
+			 * Define a foreign key reference with optional reverse relationship.
+			 *
+			 * @example
+			 * // Forward reference only
+			 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+			 *
+			 * @example
+			 * // With reverse relationship
+			 * authorId: z.string().uuid().db.references(Users, {
+			 *   as: "author",      // post.author = User
+			 *   reverseAs: "posts" // user.posts = Post[]
+			 * })
+			 */
+			references(table: Table<any>, options: {
+				field?: string;
+				as: string;
+				reverseAs?: string;
+				onDelete?: "cascade" | "set null" | "restrict";
+			}) {
+				return setDBMeta(schema, {
+					reference: {
+						table,
+						field: options.field,
+						as: options.as,
+						reverseAs: options.reverseAs,
+						onDelete: options.onDelete,
+					},
+				});
+			},
+
+			/**
+			 * Encode app values to DB values (for INSERT/UPDATE).
+			 * One-way transformation is fine (e.g., password hashing).
+			 *
+			 * @example
+			 * password: z.string().db.encode(hashPassword)
+			 *
+			 * @example
+			 * // Bidirectional: pair with .db.decode()
+			 * status: z.enum(["pending", "active"])
+			 *   .db.encode(s => statusMap.indexOf(s))
+			 *   .db.decode(i => statusMap[i])
+			 */
+			encode<TDB>(encodeFn: (app: any) => TDB) {
+				return setDBMeta(schema, {encode: encodeFn});
+			},
+
+			/**
+			 * Decode DB values to app values (for SELECT).
+			 * One-way transformation is fine.
+			 *
+			 * @example
+			 * legacy: z.string().db.decode(deserializeLegacyFormat)
+			 */
+			decode<TApp>(decodeFn: (db: any) => TApp) {
+				return setDBMeta(schema, {decode: decodeFn});
+			},
+		};
 }
 
 /**
- * Mark a field as unique.
+ * Extend Zod with .db namespace for database-specific methods.
+ *
+ * Call this once at application startup to add the .db namespace to all Zod types:
  *
  * @example
- * email: unique(z.string().email())
+ * import {z} from "zod";
+ * import {extendZod, table} from "@b9g/zealot";
+ *
+ * extendZod(z);
+ *
+ * const Users = table("users", {
+ *   id: z.string().uuid().db.primary(),
+ *   email: z.string().email().db.unique(),
+ * });
+ *
+ * @param zodModule - The Zod module to extend (typically `z` from `import {z} from "zod"`)
  */
-export function unique<T extends ZodTypeAny>(schema: T): T {
-	return setDBMeta(schema, {unique: true});
+export function extendZod(zodModule: typeof z): void {
+	// Programmatically extend ALL Zod type constructors
+	// This future-proofs against new Zod types being added
+	for (const key of Object.keys(zodModule)) {
+		const value = (zodModule as any)[key];
+
+		// Check if this is a Zod type constructor (has prototype and starts with "Zod")
+		if (
+			typeof value === 'function' &&
+			value.prototype &&
+			key.startsWith('Zod')
+		) {
+			// Skip if .db already exists (avoid double-extending)
+			if (!('db' in value.prototype)) {
+				Object.defineProperty(value.prototype, 'db', {
+					get() {
+						return createDbMethods(this as ZodTypeAny);
+					},
+					enumerable: false,
+					configurable: true,
+				});
+			}
+		}
+	}
 }
 
-/**
- * Mark a field for indexing.
- *
- * @example
- * createdAt: index(z.date())
- */
-export function index<T extends ZodTypeAny>(schema: T): T {
-	return setDBMeta(schema, {indexed: true});
-}
-
-/**
- * Mark a field as the soft delete timestamp.
- * Enables the Table.deleted() helper for filtering soft-deleted records.
- *
- * @example
- * deletedAt: softDelete(z.date().nullable())
- */
-export function softDelete<T extends ZodTypeAny>(schema: T): T {
-	return setDBMeta(schema, {softDelete: true});
-}
-
-/**
- * Define a foreign key reference with optional reverse relationship.
- *
- * **Forward reference** (`as`): Populates the referenced entity on this table's rows.
- * **Reverse reference** (`reverseAs`): Populates an array of referencing entities on the target table.
- *
- * **Important**: Reverse relationships are runtime materializations only - they are NOT part of
- * the schema's type inference. They only reflect data already in the query result set.
- *
- * @example
- * // Forward reference only
- * authorId: references(z.string().uuid(), Users, { as: "author" })
- *
- * @example
- * // With reverse relationship
- * authorId: references(z.string().uuid(), Users, {
- *   as: "author",      // post.author = User
- *   reverseAs: "posts" // user.posts = Post[]
- * })
- *
- * @example
- * // Specify referenced field explicitly
- * authorId: references(z.string().uuid(), Users, {
- *   field: "id",
- *   as: "author",
- *   reverseAs: "posts"
- * })
- */
-export function references<T extends ZodTypeAny>(
-	schema: T,
-	table: Table<any>,
-	options: {
-		field?: string;
-		as: string;
-		reverseAs?: string;
-		onDelete?: "cascade" | "set null" | "restrict";
-	},
-): T {
-	return setDBMeta(schema, {
-		reference: {
-			table,
-			field: options.field,
-			as: options.as,
-			reverseAs: options.reverseAs,
-			onDelete: options.onDelete,
-		},
-	});
-}
+// Auto-extend the local z import so our own code works
+extendZod(z);
 
 // ============================================================================
 // Field Metadata Types (for forms/admin)
@@ -826,6 +885,12 @@ export function table<T extends Record<string, ZodTypeAny>>(
 				onDelete: ref.onDelete,
 			});
 			dbMeta.reference = ref;
+		}
+		if (fieldDbMeta.encode) {
+			dbMeta.encode = fieldDbMeta.encode;
+		}
+		if (fieldDbMeta.decode) {
+			dbMeta.decode = fieldDbMeta.decode;
 		}
 
 		meta.fields[key] = dbMeta;
@@ -1436,3 +1501,91 @@ export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
  * Infer the insert type (respects defaults).
  */
 export type Insert<T extends Table<any>> = z.input<T["schema"]>;
+
+// ============================================================================
+// TypeScript Declarations for .db namespace
+// ============================================================================
+
+declare module "zod" {
+	interface ZodType {
+		readonly db: {
+			/**
+			 * Mark field as primary key.
+			 * @example z.string().uuid().db.primary()
+			 */
+			primary<T extends ZodTypeAny>(this: T): T;
+
+			/**
+			 * Mark field as unique.
+			 * @example z.string().email().db.unique()
+			 */
+			unique<T extends ZodTypeAny>(this: T): T;
+
+			/**
+			 * Create an index on this field.
+			 * @example z.date().db.index()
+			 */
+			index<T extends ZodTypeAny>(this: T): T;
+
+			/**
+			 * Mark field as soft delete timestamp.
+			 * @example z.date().nullable().default(null).db.softDelete()
+			 */
+			softDelete<T extends ZodTypeAny>(this: T): T;
+
+			/**
+			 * Define a foreign key reference with optional reverse relationship.
+			 *
+			 * @example
+			 * // Forward reference only
+			 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+			 *
+			 * @example
+			 * // With reverse relationship
+			 * authorId: z.string().uuid().db.references(Users, {
+			 *   as: "author",      // post.author = User
+			 *   reverseAs: "posts" // user.posts = Post[]
+			 * })
+			 */
+			references<T extends ZodTypeAny>(this: T, table: Table<any>, options: {
+				field?: string;
+				as: string;
+				reverseAs?: string;
+				onDelete?: "cascade" | "set null" | "restrict";
+			}): T;
+
+			/**
+			 * Encode app values to DB values (for INSERT/UPDATE).
+			 * One-way transformation is fine (e.g., password hashing).
+			 *
+			 * @example
+			 * password: z.string().db.encode(hashPassword)
+			 *
+			 * @example
+			 * // Bidirectional: pair with .db.decode()
+			 * status: z.enum(["pending", "active"])
+			 *   .db.encode(s => statusMap.indexOf(s))
+			 *   .db.decode(i => statusMap[i])
+			 */
+			serialize<T extends ZodTypeAny, TDB>(this: T, fn: (app: z.infer<T>) => TDB): T;
+
+			/**
+			 * Shorthand for JSON encoding/decoding.
+			 * Equivalent to .transform(JSON.parse).db.serialize(JSON.stringify)
+			 *
+			 * @example
+			 * metadata: z.object({theme: z.string()}).db.json()
+			 */
+			json<T extends ZodTypeAny>(this: T): ZodTypeAny;
+
+			/**
+			 * Shorthand for CSV encoding/decoding of string arrays.
+			 * Equivalent to .transform(s => s.split(",")).db.serialize(arr => arr.join(","))
+			 *
+			 * @example
+			 * tags: z.array(z.string()).db.csv()
+			 */
+			csv<T extends ZodTypeAny>(this: T): ZodTypeAny;
+		};
+	}
+}

@@ -1,24 +1,25 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, references} from "./table.js";
+import {table, extendZod} from "./table.js";
 import {parseTemplate} from "./query.js";
+
+// Extend Zod once before tests
+extendZod(z);
 
 // Test tables (Uppercase plural convention)
 const Users = table("users", {
-	id: primary(z.string().uuid()),
+	id: z.string().uuid().db.primary(),
 	email: z.string().email(),
 	name: z.string(),
 	role: z.enum(["user", "admin"]).default("user"),
-	createdAt: z.date(),
-});
+	createdAt: z.date()});
 
 const Posts = table("posts", {
-	id: primary(z.string().uuid()),
-	authorId: references(z.string().uuid(), Users, {as: "author"}),
+	id: z.string().uuid().db.primary(),
+	authorId: z.string().uuid().db.references(Users, {as: "author"}),
 	title: z.string(),
 	published: z.boolean().default(false),
-	viewCount: z.number().int().default(0),
-});
+	viewCount: z.number().int().default(0)});
 
 describe("Table.where()", () => {
 	test("simple equality with qualified column", () => {

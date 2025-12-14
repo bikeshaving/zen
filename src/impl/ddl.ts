@@ -94,6 +94,7 @@ function unwrapType(schema: z.ZodType): UnwrapResult {
 function mapZodToSQL(
 	schema: z.ZodType,
 	dialect: SQLDialect,
+	fieldMeta?: Record<string, any>,
 ): {sqlType: string; defaultValue?: string} {
 	const {core, hasDefault, defaultValue} = unwrapType(schema);
 
@@ -161,6 +162,7 @@ function mapZodToSQL(
 			sqlDefault = `'${String(defaultValue).replace(/'/g, "''")}'`;
 		}
 	} else if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+		// Objects and arrays: JSONB in PostgreSQL, TEXT elsewhere
 		if (dialect === "postgresql") {
 			sqlType = "JSONB";
 		} else {
@@ -204,7 +206,7 @@ export function generateColumnDDL(
 	dialect: SQLDialect = "sqlite",
 ): string {
 	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
-	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(zodType, dialect);
+	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(zodType, dialect, fieldMeta);
 
 	let def = `${quoteIdent(fieldName, dialect)} ${sqlType}`;
 
@@ -248,6 +250,7 @@ export function generateDDL<T extends Table<any>>(
 		const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
 			zodType as z.ZodType,
 			dialect,
+			fieldMeta,
 		);
 
 		const column: ColumnDef = {

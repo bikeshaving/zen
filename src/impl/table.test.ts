@@ -1,28 +1,29 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, index, references, isTable} from "./table.js";
+import {table, isTable, extendZod} from "./table.js";
+
+// Extend Zod once before tests
+extendZod(z);
 
 describe("table", () => {
 	test("basic table definition", () => {
 		const users = table("users", {
 			id: z.string().uuid(),
-			name: z.string(),
-		});
+			name: z.string()});
 
 		expect(users.name).toBe("users");
 	});
 
 	test("extracts field metadata", () => {
 		const users = table("users", {
-			id: primary(z.string().uuid()),
-			email: unique(z.string().email()),
+			id: z.string().uuid().db.primary(),
+			email: z.string().email().db.unique(),
 			name: z.string().max(100),
 			bio: z.string().max(2000),
 			age: z.number().int().min(0).max(150),
 			role: z.enum(["user", "admin", "moderator"]).default("user"),
 			active: z.boolean().default(true),
-			createdAt: z.date().default(() => new Date()),
-		});
+			createdAt: z.date().default(() => new Date())});
 
 		const fields = users.fields();
 
@@ -65,9 +66,8 @@ describe("table", () => {
 
 	test("detects primary key", () => {
 		const users = table("users", {
-			id: primary(z.string().uuid()),
-			email: z.string().email(),
-		});
+			id: z.string().uuid().db.primary(),
+			email: z.string().email()});
 
 		expect(users._meta.primary).toBe("id");
 		expect(users.primary).not.toBeNull();
@@ -77,11 +77,10 @@ describe("table", () => {
 
 	test("handles optional and nullable fields", () => {
 		const profiles = table("profiles", {
-			id: primary(z.string().uuid()),
+			id: z.string().uuid().db.primary(),
 			bio: z.string().optional(),
 			avatar: z.string().url().nullable(),
-			nickname: z.string().nullish(),
-		});
+			nickname: z.string().nullish()});
 
 		const fields = profiles.fields();
 
@@ -93,9 +92,8 @@ describe("table", () => {
 
 	test("url detection", () => {
 		const links = table("links", {
-			id: primary(z.string().uuid()),
-			url: z.string().url(),
-		});
+			id: z.string().uuid().db.primary(),
+			url: z.string().url()});
 
 		const fields = links.fields();
 		expect(fields.url.type).toBe("url");
@@ -103,10 +101,9 @@ describe("table", () => {
 
 	test("indexed fields", () => {
 		const posts = table("posts", {
-			id: primary(z.string().uuid()),
-			authorId: index(z.string().uuid()),
-			title: z.string(),
-		});
+			id: z.string().uuid().db.primary(),
+			authorId: z.string().uuid().db.index(),
+			title: z.string()});
 
 		const fields = posts.fields();
 		expect(fields.authorId.indexed).toBe(true);
@@ -116,13 +113,11 @@ describe("table", () => {
 		const posts = table(
 			"posts",
 			{
-				id: primary(z.string().uuid()),
+				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
-				createdAt: z.date(),
-			},
+				createdAt: z.date()},
 			{
-				indexes: [["authorId", "createdAt"]],
-			},
+				indexes: [["authorId", "createdAt"]]},
 		);
 
 		expect(posts.indexes).toEqual([["authorId", "createdAt"]]);
@@ -130,20 +125,16 @@ describe("table", () => {
 
 	test("extracts Zod 4 .meta() for UI metadata", () => {
 		const users = table("users", {
-			id: primary(z.string().uuid()),
-			email: unique(
-				z.string().email().meta({
+			id: z.string().uuid().db.primary(),
+			email: z.string().email().meta({
 					label: "Email Address",
 					helpText: "We will never share your email",
-					placeholder: "you@example.com",
-				}),
-			),
+					placeholder: "you@example.com"}).db.unique(),
 			role: z
 				.enum(["user", "admin"])
 				.default("user")
 				.meta({label: "User Role", widget: "radio"}),
-			bio: z.string().optional().meta({label: "Biography", widget: "textarea"}),
-		});
+			bio: z.string().optional().meta({label: "Biography", widget: "textarea"})});
 
 		const fields = users.fields();
 
@@ -169,8 +160,7 @@ describe("table", () => {
 	test("rejects table names containing dots", () => {
 		expect(() =>
 			table("schema.users", {
-				id: z.string().uuid(),
-			}),
+				id: z.string().uuid()}),
 		).toThrow('table names cannot contain "."');
 	});
 
@@ -190,8 +180,7 @@ describe("type inference", () => {
 		const users = table("users", {
 			id: z.string().uuid(),
 			name: z.string(),
-			age: z.number().optional(),
-		});
+			age: z.number().optional()});
 
 		// Type check - this should compile
 		type UserDoc = z.infer<typeof users.schema>;
@@ -203,9 +192,8 @@ describe("type inference", () => {
 describe("isTable", () => {
 	test("returns true for table objects", () => {
 		const users = table("users", {
-			id: primary(z.string().uuid()),
-			name: z.string(),
-		});
+			id: z.string().uuid().db.primary(),
+			name: z.string()});
 
 		expect(isTable(users)).toBe(true);
 	});
@@ -221,19 +209,17 @@ describe("isTable", () => {
 
 describe("Table.pick()", () => {
 	const Users = table("users", {
-		id: primary(z.string().uuid()),
-		email: unique(z.string().email()),
+		id: z.string().uuid().db.primary(),
+		email: z.string().email().db.unique(),
 		name: z.string(),
-		bio: z.string().optional(),
-	});
+		bio: z.string().optional()});
 
 	const Posts = table("posts", {
-		id: primary(z.string().uuid()),
-		authorId: references(z.string().uuid(), Users, {as: "author"}),
+		id: z.string().uuid().db.primary(),
+		authorId: z.string().uuid().db.references(Users, {as: "author"}),
 		title: z.string(),
 		body: z.string(),
-		published: z.boolean().default(false),
-	});
+		published: z.boolean().default(false)});
 
 	test("creates partial table with picked fields", () => {
 		const UserSummary = Users.pick("id", "name");
@@ -291,8 +277,7 @@ describe("Table.pick()", () => {
 		const result = UserSummary.schema.parse({
 			id: validId,
 			name: "Alice",
-			email: "alice@example.com",
-		});
+			email: "alice@example.com"});
 		expect(result).toEqual({id: validId, name: "Alice"});
 	});
 
@@ -317,11 +302,10 @@ describe("Table.pick()", () => {
 
 describe("Table.cols", () => {
 	const Users = table("users", {
-		id: primary(z.string().uuid()),
-		email: unique(z.string().email()),
+		id: z.string().uuid().db.primary(),
+		email: z.string().email().db.unique(),
 		name: z.string(),
-		createdAt: z.date(),
-	});
+		createdAt: z.date()});
 
 	test("returns SQL fragment for column", () => {
 		const fragment = Users.cols.id;

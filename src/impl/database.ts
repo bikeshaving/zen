@@ -6,7 +6,8 @@
  */
 
 import type {Table, Infer, Insert} from "./table.js";
-import {validateWithStandardSchema} from "./table.js";
+import {validateWithStandardSchema, getDBMeta} from "./table.js";
+import {z} from "zod";
 import {
 	createQuery,
 	parseTemplate,
@@ -14,6 +15,114 @@ import {
 	normalizeOne,
 	type SQLDialect,
 } from "./query.js";
+
+// ============================================================================
+// Encoding/Decoding
+// ============================================================================
+
+/**
+ * Encode data for database insert/update operations.
+ * Converts app values → DB values using .db.encode() functions.
+ * Automatically encodes objects/arrays as JSON unless custom encoding is specified.
+ */
+function encodeData<T extends Table<any>>(
+	table: T,
+	data: Record<string, unknown>,
+): Record<string, unknown> {
+	const encoded: Record<string, unknown> = {};
+	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+
+	for (const [key, value] of Object.entries(data)) {
+		const fieldSchema = shape?.[key];
+		if (!fieldSchema) {
+			encoded[key] = value;
+			continue;
+		}
+
+		const dbMeta = getDBMeta(fieldSchema);
+		if (dbMeta.encode && typeof dbMeta.encode === "function") {
+			// Custom encoding specified - use it
+			encoded[key] = dbMeta.encode(value);
+		} else {
+			// Check if field is an object or array type - auto-encode as JSON
+			let core = fieldSchema;
+			while (typeof (core as any).unwrap === "function") {
+				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
+				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+					break;
+				}
+				core = (core as any).unwrap();
+			}
+
+			if ((core instanceof z.ZodObject || core instanceof z.ZodArray) && value !== null && value !== undefined) {
+				// Automatic JSON encoding for objects and arrays
+				encoded[key] = JSON.stringify(value);
+			} else {
+				encoded[key] = value;
+			}
+		}
+	}
+
+	return encoded;
+}
+
+/**
+ * Decode data from database read operations.
+ * Converts DB values → app values using .db.decode() functions.
+ * Automatically decodes JSON strings to objects/arrays unless custom decoding is specified.
+ */
+function decodeData<T extends Table<any>>(
+	table: T,
+	data: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+	if (!data) return data;
+
+	const decoded: Record<string, unknown> = {};
+	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+
+	for (const [key, value] of Object.entries(data)) {
+		const fieldSchema = shape?.[key];
+		if (!fieldSchema) {
+			decoded[key] = value;
+			continue;
+		}
+
+		const dbMeta = getDBMeta(fieldSchema);
+		if (dbMeta.decode && typeof dbMeta.decode === "function") {
+			// Custom decoding specified - use it
+			decoded[key] = dbMeta.decode(value);
+		} else {
+			// Check if field is an object or array type - auto-decode from JSON
+			let core = fieldSchema;
+			while (typeof (core as any).unwrap === "function") {
+				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
+				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+					break;
+				}
+				core = (core as any).unwrap();
+			}
+
+			if (core instanceof z.ZodObject || core instanceof z.ZodArray) {
+				// Automatic JSON decoding for objects and arrays
+				if (typeof value === "string") {
+					try {
+						decoded[key] = JSON.parse(value);
+					} catch {
+						// If parse fails, keep as-is
+						decoded[key] = value;
+					}
+				} else {
+					// Already an object (e.g., from PostgreSQL JSONB)
+					decoded[key] = value;
+				}
+			} else {
+				decoded[key] = value;
+			}
+		}
+	}
+
+	return decoded;
+}
 
 // ============================================================================
 // Driver Interface
@@ -283,8 +392,10 @@ export class Transaction {
 			table.schema,
 			data,
 		);
-		const row = await this.#driver.insert(table.name, validated);
-		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
+		const encoded = encodeData(table, validated);
+		const row = await this.#driver.insert(table.name, encoded);
+		const decoded = decodeData(table, row);
+		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 	}
 
 	async update<T extends Table<any>>(
@@ -308,9 +419,11 @@ export class Transaction {
 			throw new Error("No fields to update");
 		}
 
-		const row = await this.#driver.update(table.name, pk, id, validated);
+		const encoded = encodeData(table, validated);
+		const row = await this.#driver.update(table.name, pk, id, encoded);
 		if (!row) return null;
-		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
+		const decoded = decodeData(table, row);
+		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 	}
 
 	async delete<T extends Table<any>>(
@@ -694,9 +807,10 @@ export class Database extends EventTarget {
 			table.schema,
 			data,
 		);
+		const encoded = encodeData(table, validated);
 
-		const columns = Object.keys(validated);
-		const values = Object.values(validated);
+		const columns = Object.keys(encoded);
+		const values = Object.values(encoded);
 		const tableName = this.#quoteIdent(table.name);
 		const columnList = columns.map((c) => this.#quoteIdent(c)).join(", ");
 		const placeholders = columns
@@ -707,7 +821,8 @@ export class Database extends EventTarget {
 		if (this.#driver.dialect !== "mysql") {
 			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
-			return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 		}
 
 		// MySQL fallback: INSERT then SELECT
@@ -745,7 +860,8 @@ export class Database extends EventTarget {
 			throw new Error("No fields to update");
 		}
 
-		const values = Object.values(validated);
+		const encoded = encodeData(table, validated);
+		const values = Object.values(encoded);
 		const tableName = this.#quoteIdent(table.name);
 		const setClause = columns
 			.map((c, i) => `${this.#quoteIdent(c)} = ${this.#placeholder(i + 1)}`)
@@ -761,7 +877,8 @@ export class Database extends EventTarget {
 				id,
 			]);
 			if (!row) return null;
-			return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 		}
 
 		// MySQL fallback: UPDATE then SELECT
@@ -773,7 +890,8 @@ export class Database extends EventTarget {
 			id,
 		]);
 		if (!row) return null;
-		return validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>;
+		const decoded = decodeData(table, row);
+		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 	}
 
 	/**

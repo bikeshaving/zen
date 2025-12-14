@@ -14,6 +14,9 @@ export {
 	type TableOptions,
 	type ReferenceInfo,
 
+	// Zod extension
+	extendZod,
+
 	// Field wrappers
 	primary,
 	unique,
