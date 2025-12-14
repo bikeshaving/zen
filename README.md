@@ -505,34 +505,114 @@ All errors extend `ZealotError` with typed error codes:
 import {
   ZealotError,
   ValidationError,
+  ConstraintViolationError,
   NotFoundError,
   isZealotError,
   hasErrorCode
 } from "@b9g/zealot";
 
+// Validation errors (Zod/Standard Schema)
 try {
-  await db.insert(Users, invalidData);
+  await db.insert(Users, { email: "not-an-email" });
 } catch (e) {
   if (hasErrorCode(e, "VALIDATION_ERROR")) {
     console.log(e.fieldErrors); // {email: ["Invalid email"]}
   }
 }
+
+// Constraint violations (database-level)
+try {
+  await db.insert(Users, { id: "1", email: "duplicate@example.com" });
+} catch (e) {
+  if (e instanceof ConstraintViolationError) {
+    console.log(e.kind);        // "unique"
+    console.log(e.constraint);  // "users_email_unique"
+    console.log(e.table);       // "users"
+    console.log(e.column);      // "email"
+  }
+}
+
+// Transaction errors (rolled back automatically)
+await db.transaction(async (tx) => {
+  await tx.insert(Users, newUser);
+  await tx.insert(Posts, newPost); // Fails → transaction rolled back
+});
 ```
 
 **Error types:**
-- `ValidationError` — Zod validation failed
-- `NotFoundError` — Entity not found
-- `AlreadyExistsError` — Unique constraint violated
-- `QueryError` — SQL execution failed
-- `MigrationError` / `MigrationLockError` — Migration failures
-- `ConstraintViolationError` — FK or check constraint violated
-- `ConnectionError` / `TransactionError` — Connection issues
+- `ValidationError` — Schema validation failed (fieldErrors, nested paths)
+- `ConstraintViolationError` — Database constraint violated (kind, constraint, table, column)
+- `NotFoundError` — Entity not found (tableName, id)
+- `AlreadyExistsError` — Unique constraint violated (tableName, field, value)
+- `QueryError` — SQL execution failed (sql)
+- `MigrationError` / `MigrationLockError` — Migration failures (fromVersion, toVersion)
+- `ConnectionError` / `TransactionError` — Connection/transaction issues
+
+## Debugging
+
+Inspect generated SQL and query plans:
+
+```typescript
+// Print SQL without executing
+const query = db.print`SELECT * FROM ${Posts} WHERE ${Posts.where({ published: true })}`;
+console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = $1
+console.log(query.params);  // [true]
+
+// Inspect DDL generation
+const ddl = db.print`${Posts.ddl()}`;
+console.log(ddl.sql);  // CREATE TABLE IF NOT EXISTS "posts" (...)
+
+// Analyze query execution plan
+const plan = await db.explain`
+  SELECT * FROM ${Posts}
+  WHERE ${Posts.where({ authorId: userId })}
+`;
+console.log(plan);
+// SQLite: [{ detail: "SEARCH posts USING INDEX idx_posts_authorId (authorId=?)" }]
+// PostgreSQL: [{ "QUERY PLAN": "Index Scan using idx_posts_authorId on posts" }]
+
+// Debug fragments
+console.log(Posts.where({ published: true }).toString());
+// SQLFragment { sql: "\"posts\".\"published\" = ?", params: [true] }
+
+console.log(Posts.ddl().toString());
+// DDLFragment { type: "create-table", table: "posts" }
+```
+
+## Dialect Support
+
+| Feature | SQLite | PostgreSQL | MySQL |
+|---------|--------|------------|-------|
+| **DDL Generation** | ✅ | ✅ | ✅ |
+| **RETURNING** | ✅ | ✅ | ❌ (uses SELECT after) |
+| **IF NOT EXISTS** (CREATE TABLE) | ✅ | ✅ | ✅ |
+| **IF NOT EXISTS** (ADD COLUMN) | ✅ | ✅ | ❌ (may error if exists) |
+| **Migration Locks** | BEGIN EXCLUSIVE | pg_advisory_lock | GET_LOCK |
+| **EXPLAIN** | EXPLAIN QUERY PLAN | EXPLAIN | EXPLAIN |
+| **JSON Type** | TEXT | JSONB | TEXT |
+| **Boolean Type** | INTEGER (0/1) | BOOLEAN | BOOLEAN |
+| **Date Type** | TEXT (ISO) | TIMESTAMPTZ | DATETIME |
+| **Transactions** | ✅ | ✅ | ✅ |
+| **Advisory Locks** | ❌ | ✅ | ✅ (named) |
 
 ## What This Library Does Not Do
 
+**Query Generation:**
 - **No model classes** — Tables are plain definitions, not class instances
 - **No hidden JOINs** — You write all SQL explicitly
 - **No implicit query building** — No `.where().orderBy().limit()` chains
 - **No lazy loading** — Related data comes from your JOINs
-- **No compile-time migrations** — Runtime event-based only
 - **No ORM identity map** — Normalization is per-query, not session-wide
+
+**Migrations:**
+- **No down migrations** — Forward-only, monotonic versioning (1 → 2 → 3)
+- **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()` methods
+- **No automatic migrations** — DDL must be written explicitly in upgrade events
+- **No migration files** — Event handlers replace traditional migration folders
+- **No branching versions** — Linear version history only
+
+**Safety Philosophy:**
+- Migrations are **additive and idempotent** by design
+- Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema changes
+- Breaking changes require multi-step migrations (add, migrate data, deprecate)
+- Version numbers never decrease — rollbacks are new forward migrations
