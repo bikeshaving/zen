@@ -532,7 +532,11 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * Generate idempotent ALTER TABLE statement to add a column if it doesn't exist.
 	 * Reads column definition from table schema.
 	 *
-	 * **Idempotent**: Safe to run multiple times - uses IF NOT EXISTS to avoid errors.
+	 * **Idempotent**: Safe to run multiple times on SQLite/PostgreSQL (uses IF NOT EXISTS).
+	 *
+	 * **MySQL limitation**: MySQL does NOT support IF NOT EXISTS for ALTER TABLE ADD COLUMN.
+	 * On MySQL, this will error if the column already exists. Wrap in try/catch or check
+	 * column existence first if re-running migrations.
 	 *
 	 * **Type compatibility**: If the column already exists with a different type,
 	 * behavior depends on the database (may fail or be silently ignored). For type
@@ -541,7 +545,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * **Pure function**: Generates SQL from schema without inspecting the database.
 	 *
 	 * **Dialect-aware**: Returns an abstract DDL fragment that gets transformed
-	 * to dialect-specific SQL when passed through `db.exec()`.
+	 * to dialect-specific SQL when passed through `db.exec()`. Dialect is resolved
+	 * at execution time, not creation time.
 	 *
 	 * @param fieldName - Name of field from table schema
 	 * @returns DDL fragment (transformed to SQL based on driver dialect)
@@ -558,7 +563,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * if (e.oldVersion < 2) {
 	 *   await db.exec`${Posts.ensureColumn("views")}`;
 	 * }
-	 * // → ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0
+	 * // → SQLite/PostgreSQL: ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0
+	 * // → MySQL: ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0 (no IF NOT EXISTS)
 	 */
 	ensureColumn(fieldName: keyof z.infer<ZodObject<T>> & string): DDLFragment;
 

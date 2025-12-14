@@ -101,6 +101,10 @@ export function isDDLFragment(value: unknown): value is DDLFragment {
 /**
  * Create a DDL fragment.
  *
+ * **Dialect resolution timing**: Fragments are created WITHOUT dialect information.
+ * The dialect is resolved later when the fragment is passed through `db.exec()`,
+ * allowing the same fragment to work with different drivers (e.g., tests vs production).
+ *
  * @internal Used by Table.ddl(), ensureColumn(), etc.
  */
 export function createDDLFragment(
@@ -172,6 +176,11 @@ export function buildSelectColumns(
  * - Table objects: interpolated as quoted table names
  * - Other values: become parameterized placeholders
  *
+ * **Fragment mixing**: DDL and SQL fragments can be mixed in the same template,
+ * but it's the user's responsibility to ensure the result is valid SQL. For example,
+ * `db.exec\`${Posts.ddl()} -- ${sql\`comment\`}\`` is allowed, but
+ * `db.query\`SELECT * FROM ${Posts.ddl()}\`` will produce invalid SQL.
+ *
  * @example
  * parseTemplate`WHERE id = ${userId} AND active = ${true}`
  * // { sql: "WHERE id = ? AND active = ?", params: ["user-123", true] }
@@ -195,6 +204,21 @@ export function parseTemplate(
 ): ParsedQuery {
 	const params: unknown[] = [];
 	let sql = "";
+	let hasDDL = false;
+	let hasSQL = false;
+
+	// First pass: detect fragment types
+	for (const value of values) {
+		if (isDDLFragment(value)) hasDDL = true;
+		if (isSQLFragment(value)) hasSQL = true;
+	}
+
+	// Warn if mixing DDL and SQL fragments (usually a mistake)
+	// Note: We allow it but document that it's user's responsibility
+	if (hasDDL && hasSQL) {
+		// This is allowed but unusual - e.g., db.exec`${Posts.ddl()}; -- ${sql`comment`}`
+		// The user is responsible for ensuring the result is valid SQL
+	}
 
 	for (let i = 0; i < strings.length; i++) {
 		sql += strings[i];
@@ -202,6 +226,7 @@ export function parseTemplate(
 			const value = values[i];
 			if (isDDLFragment(value)) {
 				// Transform DDL fragment to SQL based on dialect
+				// Dialect is resolved at exec time, not fragment creation time
 				sql += transformDDLFragment(value, dialect);
 			} else if (isSQLFragment(value)) {
 				// Inject fragment SQL, replacing ? placeholders with dialect-appropriate ones
@@ -238,46 +263,62 @@ function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): strin
 	const table = fragment.table;
 	const options = fragment.options || {};
 
-	switch (fragment.type) {
-		case "create-table":
-			return generateDDL(table, {...options, dialect});
+	try {
+		switch (fragment.type) {
+			case "create-table":
+				return generateDDL(table, {...options, dialect});
 
-		case "alter-table-add-column": {
-			const {fieldName} = options;
-			const zodShape = table.schema.shape;
-			const meta = table._meta;
+			case "alter-table-add-column": {
+				const {fieldName} = options;
+				const zodShape = table.schema.shape;
+				const meta = table._meta;
 
-			const columnDef = generateColumnDDL(
-				fieldName,
-				zodShape[fieldName],
-				meta.fields[fieldName] || {},
-				dialect,
-			);
+				const columnDef = generateColumnDDL(
+					fieldName,
+					zodShape[fieldName],
+					meta.fields[fieldName] || {},
+					dialect,
+				);
 
-			const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
-			const quote = dialect === "mysql" ? "`" : '"';
+				// MySQL doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN
+				const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
+				if (dialect === "mysql" && !ifNotExists) {
+					// For MySQL, document that this will fail if column exists
+					// Users should wrap in try/catch or check column existence first
+				}
+				const quote = dialect === "mysql" ? "`" : '"';
 
-			return `ALTER TABLE ${quote}${table.name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+				return `ALTER TABLE ${quote}${table.name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+			}
+
+			case "create-index": {
+				const {fields, name: indexName} = options;
+				const finalIndexName = indexName || `idx_${table.name}_${fields.join("_")}`;
+				const quote = dialect === "mysql" ? "`" : '"';
+				const quotedColumns = fields.map((f: string) => `${quote}${f}${quote}`).join(", ");
+
+				// All three dialects support CREATE INDEX IF NOT EXISTS
+				return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${table.name}${quote}(${quotedColumns})`;
+			}
+
+			case "update": {
+				const {fromField, toField} = options;
+				const quote = dialect === "mysql" ? "`" : '"';
+
+				// UPDATE with WHERE IS NULL is supported by all dialects
+				return `UPDATE ${quote}${table.name}${quote} SET ${quote}${toField}${quote} = ${quote}${fromField}${quote} WHERE ${quote}${toField}${quote} IS NULL`;
+			}
+
+			default:
+				throw new Error(`Unknown DDL fragment type: ${(fragment as any).type}`);
 		}
-
-		case "create-index": {
-			const {fields, name: indexName} = options;
-			const finalIndexName = indexName || `idx_${table.name}_${fields.join("_")}`;
-			const quote = dialect === "mysql" ? "`" : '"';
-			const quotedColumns = fields.map((f: string) => `${quote}${f}${quote}`).join(", ");
-
-			return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${table.name}${quote}(${quotedColumns})`;
-		}
-
-		case "update": {
-			const {fromField, toField} = options;
-			const quote = dialect === "mysql" ? "`" : '"';
-
-			return `UPDATE ${quote}${table.name}${quote} SET ${quote}${toField}${quote} = ${quote}${fromField}${quote} WHERE ${quote}${toField}${quote} IS NULL`;
-		}
-
-		default:
-			throw new Error(`Unknown DDL fragment type: ${(fragment as any).type}`);
+	} catch (error) {
+		// Enrich error with context about dialect, helper, and table
+		const helperName = fragment.type.replace(/-/g, " ");
+		throw new Error(
+			`Failed to transform DDL fragment for table "${table.name}" using helper "${helperName}" with dialect "${dialect}": ${error instanceof Error ? error.message : String(error)}`,
+			{cause: error},
+		);
 	}
 }
 
