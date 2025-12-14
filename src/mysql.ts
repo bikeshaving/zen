@@ -67,8 +67,41 @@ export default class MySQLDriver implements Driver {
 			// ER_DUP_ENTRY = duplicate key/unique constraint
 			// ER_NO_REFERENCED_ROW_2 = foreign key constraint (insert)
 			// ER_ROW_IS_REFERENCED_2 = foreign key constraint (delete)
+			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+			let constraint: string | undefined;
+			let table: string | undefined;
+			let column: string | undefined;
+
+			if (code === "ER_DUP_ENTRY") {
+				kind = "unique";
+				// Example: "Duplicate entry 'value' for key 'table.index_name'"
+				const keyMatch = message.match(/for key '([^']+)'/i);
+				constraint = keyMatch ? keyMatch[1] : undefined;
+				// Extract table from constraint name (e.g., "users.email_unique" -> "users")
+				if (constraint) {
+					const parts = constraint.split(".");
+					if (parts.length > 1) {
+						table = parts[0];
+					}
+				}
+			} else if (code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+				kind = "foreign_key";
+				// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
+				const constraintMatch = message.match(/CONSTRAINT `([^`]+)`/i);
+				constraint = constraintMatch ? constraintMatch[1] : undefined;
+				const tableMatch = message.match(/`([^`]+)`\.`([^`]+)`/);
+				if (tableMatch) {
+					table = tableMatch[2]; // Second match is table name
+				}
+			}
+
 			if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
-				throw new ConstraintViolationError(message, undefined, {
+				throw new ConstraintViolationError(message, {
+					kind,
+					constraint,
+					table,
+					column,
+				}, {
 					cause: error,
 				});
 			}

@@ -128,6 +128,18 @@ export interface Driver {
  *
  * Similar to IndexedDB's IDBVersionChangeEvent combined with
  * ServiceWorker's ExtendableEvent (for waitUntil support).
+ *
+ * **Migration model**: Zealot uses monotonic, forward-only versioning:
+ * - Versions are integers that only increase: 1 → 2 → 3 → ...
+ * - Downgrading (e.g., 3 → 2) is NOT supported
+ * - Branching version histories are NOT supported
+ * - Each version should be deployed once and never modified
+ *
+ * **Best practices**:
+ * - Use conditional checks: `if (e.oldVersion < 2) { ... }`
+ * - Prefer additive changes (new columns, indexes) over destructive ones
+ * - Never modify past migrations - add new versions instead
+ * - Keep migrations idempotent when possible (use ensureColumn, ensureIndex)
  */
 export class DatabaseUpgradeEvent extends Event {
 	readonly oldVersion: number;

@@ -173,19 +173,58 @@ export class AlreadyExistsError extends ZealotError {
 }
 
 /**
- * Thrown when a constraint is violated (foreign key, check, etc.).
+ * Thrown when a database constraint is violated.
+ *
+ * Constraint violations are detected at the database level and converted
+ * from driver-specific errors into this normalized format.
+ *
+ * **Stable fields**: All fields are always present with defined types.
+ * Best-effort extraction from driver errors means some may be undefined.
+ *
+ * **Transaction behavior**: This error is thrown immediately and does NOT
+ * auto-rollback. The caller or driver transaction wrapper handles rollback.
  */
 export class ConstraintViolationError extends ZealotError {
-	readonly constraintName?: string;
+	/**
+	 * Type of constraint that was violated.
+	 * "unknown" if the specific type couldn't be determined from the error.
+	 */
+	readonly kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown";
+
+	/**
+	 * Name of the constraint (e.g., "users_email_unique", "users.email").
+	 * May be undefined if the database error didn't include it.
+	 */
+	readonly constraint?: string;
+
+	/**
+	 * Table name where the violation occurred.
+	 * May be undefined if not extractable from the error.
+	 */
+	readonly table?: string;
+
+	/**
+	 * Column name involved in the violation.
+	 * May be undefined if not extractable from the error.
+	 */
+	readonly column?: string;
 
 	constructor(
 		message: string,
-		constraintName?: string,
+		details: {
+			kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown";
+			constraint?: string;
+			table?: string;
+			column?: string;
+		},
 		options?: ErrorOptions,
 	) {
 		super("CONSTRAINT_VIOLATION", message, options);
 		this.name = "ConstraintViolationError";
-		this.constraintName = constraintName;
+		this.kind = details.kind;
+		this.constraint = details.constraint;
+		this.table = details.table;
+		this.column = details.column;
 	}
 }
 

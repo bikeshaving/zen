@@ -61,15 +61,28 @@ export default class PostgresDriver implements Driver {
 		if (error && typeof error === "object" && "code" in error) {
 			const code = (error as any).code;
 			const message = (error as any).message || String(error);
-			const constraint = (error as any).constraint_name;
+			const constraint = (error as any).constraint_name || (error as any).constraint;
+			const table = (error as any).table_name || (error as any).table;
+			const column = (error as any).column_name || (error as any).column;
 
 			// PostgreSQL constraint violations
 			// 23505 = unique_violation
 			// 23503 = foreign_key_violation
 			// 23514 = check_violation
 			// 23502 = not_null_violation
-			if (code === "23505" || code === "23503" || code === "23514" || code === "23502") {
-				throw new ConstraintViolationError(message, constraint, {
+			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+			if (code === "23505") kind = "unique";
+			else if (code === "23503") kind = "foreign_key";
+			else if (code === "23514") kind = "check";
+			else if (code === "23502") kind = "not_null";
+
+			if (kind !== "unknown") {
+				throw new ConstraintViolationError(message, {
+					kind,
+					constraint,
+					table,
+					column,
+				}, {
 					cause: error,
 				});
 			}

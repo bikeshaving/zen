@@ -53,11 +53,27 @@ export default class SQLiteDriver implements Driver {
 
 			// SQLite constraint violations
 			if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_UNIQUE") {
-				// Extract constraint name from message if possible
+				// Extract table.column from message
 				// Example: "UNIQUE constraint failed: users.email"
-				const match = message.match(/constraint failed: (\w+\.\w+)/i);
-				const constraintName = match ? match[1] : undefined;
-				throw new ConstraintViolationError(message, constraintName, {
+				const match = message.match(/constraint failed: (\w+)\.(\w+)/i);
+				const table = match ? match[1] : undefined;
+				const column = match ? match[2] : undefined;
+				const constraint = match ? `${table}.${column}` : undefined;
+
+				// Determine kind from error code
+				let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+				if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
+				else if (message.includes("UNIQUE")) kind = "unique";
+				else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
+				else if (message.includes("NOT NULL")) kind = "not_null";
+				else if (message.includes("CHECK")) kind = "check";
+
+				throw new ConstraintViolationError(message, {
+					kind,
+					constraint,
+					table,
+					column,
+				}, {
 					cause: error,
 				});
 			}

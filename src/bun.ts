@@ -63,29 +63,95 @@ export default class BunDriver implements Driver {
 		if (error && typeof error === "object" && "code" in error) {
 			const code = (error as any).code;
 			const message = (error as any).message || String(error);
-			const constraint = (error as any).constraint_name;
 
 			// Handle constraint violations based on dialect
 			if (this.dialect === "sqlite") {
 				// SQLite errors
 				if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_UNIQUE") {
-					const match = message.match(/constraint failed: (\w+\.\w+)/i);
-					const constraintName = match ? match[1] : undefined;
-					throw new ConstraintViolationError(message, constraintName, {
+					// Extract table.column from message
+					// Example: "UNIQUE constraint failed: users.email"
+					const match = message.match(/constraint failed: (\w+)\.(\w+)/i);
+					const table = match ? match[1] : undefined;
+					const column = match ? match[2] : undefined;
+					const constraint = match ? `${table}.${column}` : undefined;
+
+					// Determine kind from error code
+					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+					if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
+					else if (message.includes("UNIQUE")) kind = "unique";
+					else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
+					else if (message.includes("NOT NULL")) kind = "not_null";
+					else if (message.includes("CHECK")) kind = "check";
+
+					throw new ConstraintViolationError(message, {
+						kind,
+						constraint,
+						table,
+						column,
+					}, {
 						cause: error,
 					});
 				}
 			} else if (this.dialect === "postgresql") {
 				// PostgreSQL errors (23xxx = integrity constraint violation)
 				if (code === "23505" || code === "23503" || code === "23514" || code === "23502") {
-					throw new ConstraintViolationError(message, constraint, {
+					const constraint = (error as any).constraint_name || (error as any).constraint;
+					const table = (error as any).table_name || (error as any).table;
+					const column = (error as any).column_name || (error as any).column;
+
+					// PostgreSQL constraint violations (23505 = unique, 23503 = fk, 23514 = check, 23502 = not null)
+					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+					if (code === "23505") kind = "unique";
+					else if (code === "23503") kind = "foreign_key";
+					else if (code === "23514") kind = "check";
+					else if (code === "23502") kind = "not_null";
+
+					throw new ConstraintViolationError(message, {
+						kind,
+						constraint,
+						table,
+						column,
+					}, {
 						cause: error,
 					});
 				}
 			} else if (this.dialect === "mysql") {
 				// MySQL errors
 				if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
-					throw new ConstraintViolationError(message, undefined, {
+					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+					let constraint: string | undefined;
+					let table: string | undefined;
+					let column: string | undefined;
+
+					if (code === "ER_DUP_ENTRY") {
+						kind = "unique";
+						// Example: "Duplicate entry 'value' for key 'table.index_name'"
+						const keyMatch = message.match(/for key '([^']+)'/i);
+						constraint = keyMatch ? keyMatch[1] : undefined;
+						// Extract table from constraint name (e.g., "users.email_unique" -> "users")
+						if (constraint) {
+							const parts = constraint.split(".");
+							if (parts.length > 1) {
+								table = parts[0];
+							}
+						}
+					} else if (code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+						kind = "foreign_key";
+						// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
+						const constraintMatch = message.match(/CONSTRAINT `([^`]+)`/i);
+						constraint = constraintMatch ? constraintMatch[1] : undefined;
+						const tableMatch = message.match(/`([^`]+)`\.`([^`]+)`/);
+						if (tableMatch) {
+							table = tableMatch[2]; // Second match is table name
+						}
+					}
+
+					throw new ConstraintViolationError(message, {
+						kind,
+						constraint,
+						table,
+						column,
+					}, {
 						cause: error,
 					});
 				}

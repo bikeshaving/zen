@@ -76,7 +76,18 @@ export function validateWithStandardSchema<T = unknown>(
 const DB_META_NAMESPACE = "db" as const;
 
 /**
- * Helper to safely get database metadata from a schema.
+ * Get database metadata from a schema.
+ *
+ * Metadata is stored under a namespaced key to avoid collisions with user metadata.
+ *
+ * @param schema - Zod schema to read metadata from
+ * @returns Database metadata object (empty object if none exists)
+ *
+ * @example
+ * const emailMeta = getDBMeta(emailSchema);
+ * if (emailMeta.unique) {
+ *   console.log("This field has a unique constraint");
+ * }
  */
 export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
 	try {
@@ -89,7 +100,35 @@ export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
 }
 
 /**
- * Helper to set database metadata on a schema, preserving user metadata.
+ * Set database metadata on a schema, preserving both user metadata and existing DB metadata.
+ *
+ * **Declarative only**: Metadata is read once at `table()` construction time.
+ * Mutating metadata after a table is defined will NOT affect behavior.
+ *
+ * **Precedence**: Later calls to setDBMeta() override earlier ones (last write wins).
+ * User metadata in the root object is preserved separately from DB metadata.
+ *
+ * @param schema - Zod schema to attach metadata to
+ * @param dbMeta - Database metadata to set (merges with existing DB metadata)
+ * @returns New schema with metadata attached
+ *
+ * @example
+ * // Define custom field wrapper
+ * function hashed<T extends z.ZodString>(schema: T) {
+ *   return setDBMeta(
+ *     schema.transform(password => bcrypt.hashSync(password, 10)),
+ *     { hashed: true }
+ *   );
+ * }
+ *
+ * // User metadata is preserved separately
+ * const email = z.string()
+ *   .email()
+ *   .meta({ label: "Email Address" }); // User metadata
+ * const uniqueEmail = setDBMeta(email, { unique: true }); // DB metadata
+ *
+ * // Both are accessible:
+ * uniqueEmail.meta(); // { label: "Email Address", db: { unique: true } }
  */
 export function setDBMeta<T extends ZodTypeAny>(
 	schema: T,
@@ -469,8 +508,16 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	/**
 	 * Generate CREATE TABLE DDL for this table.
 	 *
+	 * **Pure function**: Generates SQL from table schema definition only, without
+	 * inspecting the actual database. Does not check if table exists or validate
+	 * against current database state.
+	 *
+	 * **Dialect-dependent**: Output varies by SQL dialect. Specify the target
+	 * dialect explicitly or use the driver's default. The same table definition
+	 * will produce different SQL for SQLite vs PostgreSQL vs MySQL.
+	 *
 	 * @param options - DDL generation options (dialect, ifNotExists)
-	 * @returns SQL CREATE TABLE statement
+	 * @returns SQL CREATE TABLE statement (dialect-specific)
 	 *
 	 * @example
 	 * // In migrations
@@ -485,7 +532,13 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * Generate idempotent ALTER TABLE statement to add a column if it doesn't exist.
 	 * Reads column definition from table schema.
 	 *
-	 * Safe for additive migrations - won't error if column already exists.
+	 * **Idempotent**: Safe to run multiple times - uses IF NOT EXISTS to avoid errors.
+	 *
+	 * **Type compatibility**: If the column already exists with a different type,
+	 * behavior depends on the database (may fail or be silently ignored). For type
+	 * changes, use a multi-step migration: add new column, copy data, drop old column.
+	 *
+	 * **Pure function**: Generates SQL from schema without inspecting the database.
 	 *
 	 * @param fieldName - Name of field from table schema
 	 * @param options - Dialect for SQL generation
@@ -510,7 +563,18 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	/**
 	 * Generate idempotent CREATE INDEX statement.
 	 *
-	 * Safe for additive migrations - won't error if index already exists.
+	 * **Idempotent**: Safe to run multiple times - uses IF NOT EXISTS to avoid errors.
+	 *
+	 * **Index naming**: Auto-generates index name as `idx_{table}_{field1}_{field2}...`
+	 * unless explicitly provided via `options.name`. Explicit names recommended for
+	 * important indexes to avoid name conflicts.
+	 *
+	 * **Non-unique**: Creates a regular (non-unique) index. For unique constraints,
+	 * use the `unique()` field wrapper in your schema instead.
+	 *
+	 * **Compatibility**: If an index with the same name exists but differs (different
+	 * columns, different uniqueness), behavior is database-dependent (may fail or be
+	 * silently ignored).
 	 *
 	 * @param fields - Array of field names to index
 	 * @param options - Index name and dialect
@@ -521,12 +585,26 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *   await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
 	 * }
 	 * // → CREATE INDEX IF NOT EXISTS idx_posts_authorId_createdAt ON posts(authorId, createdAt)
+	 *
+	 * @example
+	 * // With explicit name
+	 * await db.exec`${Posts.ensureIndex(["authorId"], { name: "posts_author_idx" })}`;
 	 */
 	ensureIndex(fields: (keyof z.infer<ZodObject<T>> & string)[], options?: {name?: string; dialect?: "sqlite" | "postgresql" | "mysql"}): string;
 
 	/**
 	 * Generate UPDATE statement to copy data from one column to another.
-	 * Idempotent - only copies if destination is NULL.
+	 *
+	 * **Idempotent**: Safe to run multiple times - only copies WHERE destination IS NULL.
+	 *
+	 * **Type compatibility**: Does NOT verify types match. Ensure source and destination
+	 * columns have compatible types or the database will error. For type conversions,
+	 * write custom migration SQL with explicit casting.
+	 *
+	 * **Data safety**: Only updates rows where destination is NULL. Will NOT overwrite
+	 * existing non-NULL values. If destination has non-NULL data, those rows are skipped.
+	 *
+	 * **Pure function**: Generates SQL from schema without inspecting the database.
 	 *
 	 * Useful for safe column renames in migrations:
 	 * 1. Add new column to schema
