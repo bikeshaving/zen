@@ -873,6 +873,438 @@ describe("reverse relationships (has-many)", () => {
 	});
 });
 
+describe("many-to-many relationships (comprehensive)", () => {
+	// Reusable table definitions
+	const postsTable = table("posts", {
+		id: primary(z.string()),
+		title: z.string(),
+		published: z.boolean(),
+	});
+
+	const tagsTable = table("tags", {
+		id: primary(z.string()),
+		name: z.string(),
+	});
+
+	const postTagsTable = table("post_tags", {
+		id: primary(z.string()),
+		postId: references(z.string(), postsTable, {
+			as: "post",
+			reverseAs: "postTags",
+		}),
+		tagId: references(z.string(), tagsTable, {as: "tag", reverseAs: "postTags"}),
+	});
+
+	test("query from posts side - get all tags for posts", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Intro to TypeScript",
+				"posts.published": true,
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t1",
+				"tags.id": "t1",
+				"tags.name": "typescript",
+			},
+			{
+				"posts.id": "p1",
+				"posts.title": "Intro to TypeScript",
+				"posts.published": true,
+				"post_tags.id": "pt2",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t2",
+				"tags.id": "t2",
+				"tags.name": "javascript",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "Advanced Patterns",
+				"posts.published": false,
+				"post_tags.id": "pt3",
+				"post_tags.postId": "p2",
+				"post_tags.tagId": "t1",
+				"tags.id": "t1",
+				"tags.name": "typescript",
+			},
+		];
+
+		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+
+		// Main result is posts
+		expect(results.length).toBe(2);
+		expect(results[0].title).toBe("Intro to TypeScript");
+		expect(results[1].title).toBe("Advanced Patterns");
+
+		// Post 1 has 2 tags via reverse relationship
+		const post1 = results[0];
+		expect(post1.postTags.length).toBe(2);
+		expect(post1.postTags[0].tag.name).toBe("typescript");
+		expect(post1.postTags[1].tag.name).toBe("javascript");
+
+		// Post 2 has 1 tag
+		const post2 = results[1];
+		expect(post2.postTags.length).toBe(1);
+		expect(post2.postTags[0].tag.name).toBe("typescript");
+
+		// Tags have reverse relationships too
+		const tsTag = post1.postTags[0].tag;
+		expect(tsTag.postTags.length).toBe(2); // Used by p1 and p2
+	});
+
+	test("query from tags side - get all posts for a tag", () => {
+		const rows = [
+			{
+				"tags.id": "t1",
+				"tags.name": "typescript",
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t1",
+				"posts.id": "p1",
+				"posts.title": "Intro to TypeScript",
+				"posts.published": true,
+			},
+			{
+				"tags.id": "t1",
+				"tags.name": "typescript",
+				"post_tags.id": "pt2",
+				"post_tags.postId": "p2",
+				"post_tags.tagId": "t1",
+				"posts.id": "p2",
+				"posts.title": "Advanced Patterns",
+				"posts.published": false,
+			},
+		];
+
+		const results = normalize<any>(rows, [tagsTable, postTagsTable, postsTable]);
+
+		// Main result is tags
+		expect(results.length).toBe(1);
+		const tag = results[0];
+		expect(tag.name).toBe("typescript");
+
+		// Tag has 2 posts via reverse relationship
+		expect(tag.postTags.length).toBe(2);
+		expect(tag.postTags[0].post.title).toBe("Intro to TypeScript");
+		expect(tag.postTags[1].post.title).toBe("Advanced Patterns");
+	});
+
+	test("post with no tags (empty reverse relationship)", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Untagged Post",
+				"posts.published": true,
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "Tagged Post",
+				"posts.published": true,
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p2",
+				"post_tags.tagId": "t1",
+				"tags.id": "t1",
+				"tags.name": "typescript",
+			},
+		];
+
+		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+
+		expect(results.length).toBe(2);
+		expect(results[0].postTags).toEqual([]); // Empty array
+		expect(results[1].postTags.length).toBe(1);
+	});
+
+	test("tag with no posts (empty reverse relationship)", () => {
+		const rows = [
+			{
+				"tags.id": "t1",
+				"tags.name": "unused-tag",
+			},
+			{
+				"tags.id": "t2",
+				"tags.name": "popular-tag",
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t2",
+				"posts.id": "p1",
+				"posts.title": "Some Post",
+				"posts.published": true,
+			},
+		];
+
+		const results = normalize<any>(rows, [tagsTable, postTagsTable, postsTable]);
+
+		expect(results.length).toBe(2);
+		expect(results[0].postTags).toEqual([]); // Unused tag
+		expect(results[1].postTags.length).toBe(1);
+	});
+
+	test("multiple many-to-many relationships on same entities", () => {
+		const usersTable = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const projectsTable = table("projects", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		// Users can be members or admins of projects
+		const projectMembersTable = table("project_members", {
+			id: primary(z.string()),
+			userId: references(z.string(), usersTable, {
+				as: "user",
+				reverseAs: "memberships",
+			}),
+			projectId: references(z.string(), projectsTable, {
+				as: "project",
+				reverseAs: "members",
+			}),
+		});
+
+		const projectAdminsTable = table("project_admins", {
+			id: primary(z.string()),
+			userId: references(z.string(), usersTable, {
+				as: "user",
+				reverseAs: "adminships",
+			}),
+			projectId: references(z.string(), projectsTable, {
+				as: "project",
+				reverseAs: "admins",
+			}),
+		});
+
+		const rows = [
+			// Alice is member of p1
+			{
+				"users.id": "u1",
+				"users.name": "Alice",
+				"project_members.id": "pm1",
+				"project_members.userId": "u1",
+				"project_members.projectId": "p1",
+				"projects.id": "p1",
+				"projects.name": "Project Alpha",
+			},
+			// Alice is admin of p1
+			{
+				"project_admins.id": "pa1",
+				"project_admins.userId": "u1",
+				"project_admins.projectId": "p1",
+			},
+		];
+
+		const entities = buildEntityMap(rows, [
+			usersTable,
+			projectsTable,
+			projectMembersTable,
+			projectAdminsTable,
+		]);
+		resolveReferences(entities, [
+			usersTable,
+			projectsTable,
+			projectMembersTable,
+			projectAdminsTable,
+		]);
+
+		const alice = entities.get("users:u1");
+		const project = entities.get("projects:p1");
+
+		expect(alice).toBeDefined();
+		expect(project).toBeDefined();
+
+		// Alice has separate memberships and adminships arrays
+		expect((alice as any).memberships.length).toBe(1);
+		expect((alice as any).adminships.length).toBe(1);
+
+		// Project has separate members and admins arrays
+		expect((project as any).members.length).toBe(1);
+		expect((project as any).admins.length).toBe(1);
+	});
+
+	test("self-referential many-to-many (user followers)", () => {
+		const usersTable = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const followsTable = table("follows", {
+			id: primary(z.string()),
+			followerId: references(z.string(), usersTable, {
+				as: "follower",
+				reverseAs: "following",
+			}),
+			followeeId: references(z.string(), usersTable, {
+				as: "followee",
+				reverseAs: "followers",
+			}),
+		});
+
+		const rows = [
+			// Alice follows Bob
+			{
+				"follows.id": "f1",
+				"follows.followerId": "u1",
+				"follows.followeeId": "u2",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			// Bob follows Alice
+			{
+				"follows.id": "f2",
+				"follows.followerId": "u2",
+				"follows.followeeId": "u1",
+			},
+			// User records
+			{
+				"users.id": "u2",
+				"users.name": "Bob",
+			},
+		];
+
+		const entities = buildEntityMap(rows, [followsTable, usersTable]);
+		resolveReferences(entities, [followsTable, usersTable]);
+
+		const alice = entities.get("users:u1");
+		const bob = entities.get("users:u2");
+
+		expect(alice).toBeDefined();
+		expect(bob).toBeDefined();
+
+		// Alice is following Bob (via followerId)
+		expect((alice as any).following.length).toBe(1);
+		expect((alice as any).following[0].followee.name).toBe("Bob");
+
+		// Alice has Bob as a follower (via followeeId)
+		expect((alice as any).followers.length).toBe(1);
+		expect((alice as any).followers[0].follower.name).toBe("Bob");
+
+		// Bob is following Alice
+		expect((bob as any).following.length).toBe(1);
+		expect((bob as any).following[0].followee.name).toBe("Alice");
+
+		// Bob has Alice as a follower
+		expect((bob as any).followers.length).toBe(1);
+		expect((bob as any).followers[0].follower.name).toBe("Alice");
+	});
+
+	test("complex query with filtering - only published posts with tags", () => {
+		const rows = [
+			// Published post with tags
+			{
+				"posts.id": "p1",
+				"posts.title": "Published Article",
+				"posts.published": true,
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t1",
+				"tags.id": "t1",
+				"tags.name": "typescript",
+			},
+			{
+				"posts.id": "p1",
+				"posts.title": "Published Article",
+				"posts.published": true,
+				"post_tags.id": "pt2",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t2",
+				"tags.id": "t2",
+				"tags.name": "javascript",
+			},
+			// Another published post with same tag
+			{
+				"posts.id": "p2",
+				"posts.title": "Another Article",
+				"posts.published": true,
+				"post_tags.id": "pt3",
+				"post_tags.postId": "p2",
+				"post_tags.tagId": "t1",
+				"tags.id": "t1",
+				"tags.name": "typescript",
+			},
+		];
+
+		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+
+		expect(results.length).toBe(2);
+
+		// Verify deduplication - typescript tag appears in both posts but is same instance
+		const tsTagFromPost1 = results[0].postTags.find(
+			(pt: any) => pt.tag.name === "typescript",
+		).tag;
+		const tsTagFromPost2 = results[1].postTags[0].tag;
+		expect(tsTagFromPost1).toBe(tsTagFromPost2); // Same object instance
+
+		// Tag reverse relationship includes both posts
+		expect(tsTagFromPost1.postTags.length).toBe(2);
+	});
+
+	test("join table with additional metadata", () => {
+		const moviesTable = table("movies", {
+			id: primary(z.string()),
+			title: z.string(),
+		});
+
+		const actorsTable = table("actors", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const castTable = table("cast", {
+			id: primary(z.string()),
+			movieId: references(z.string(), moviesTable, {
+				as: "movie",
+				reverseAs: "cast",
+			}),
+			actorId: references(z.string(), actorsTable, {
+				as: "actor",
+				reverseAs: "filmography",
+			}),
+			role: z.string(), // Additional metadata on join table
+			billingOrder: z.number(),
+		});
+
+		const rows = [
+			{
+				"movies.id": "m1",
+				"movies.title": "The Matrix",
+				"cast.id": "c1",
+				"cast.movieId": "m1",
+				"cast.actorId": "a1",
+				"cast.role": "Neo",
+				"cast.billingOrder": 1,
+				"actors.id": "a1",
+				"actors.name": "Keanu Reeves",
+			},
+			{
+				"movies.id": "m1",
+				"movies.title": "The Matrix",
+				"cast.id": "c2",
+				"cast.movieId": "m1",
+				"cast.actorId": "a2",
+				"cast.role": "Trinity",
+				"cast.billingOrder": 2,
+				"actors.id": "a2",
+				"actors.name": "Carrie-Anne Moss",
+			},
+		];
+
+		const results = normalize<any>(rows, [moviesTable, castTable, actorsTable]);
+
+		expect(results.length).toBe(1);
+		const movie = results[0];
+
+		expect(movie.cast.length).toBe(2);
+		expect(movie.cast[0].role).toBe("Neo");
+		expect(movie.cast[0].billingOrder).toBe(1);
+		expect(movie.cast[0].actor.name).toBe("Keanu Reeves");
+
+		expect(movie.cast[1].role).toBe("Trinity");
+		expect(movie.cast[1].billingOrder).toBe(2);
+	});
+});
+
 describe("reverse relationship validation", () => {
 	test("throws when reverseAs collides with target table field", () => {
 		const users = table("users", {
