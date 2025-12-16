@@ -1076,6 +1076,12 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		if (fieldDbMeta.columnType) {
 			dbMeta.columnType = fieldDbMeta.columnType;
 		}
+		if (fieldDbMeta.inserted) {
+			dbMeta.inserted = fieldDbMeta.inserted;
+		}
+		if (fieldDbMeta.updated) {
+			dbMeta.updated = fieldDbMeta.updated;
+		}
 
 		meta.fields[key] = dbMeta;
 	}

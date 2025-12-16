@@ -6,7 +6,7 @@
  */
 
 import type {Table, Infer, Insert, FullTableOnly} from "./table.js";
-import {validateWithStandardSchema, getDBMeta} from "./table.js";
+import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
 import {
 	createQuery,
@@ -117,41 +117,38 @@ function injectSchemaExpressions<T extends Table<any>>(
 	data: Record<string, unknown>,
 	operation: "insert" | "update",
 ): Record<string, unknown> {
-	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
 	const result = {...data};
 
-	for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+	for (const [fieldName, fieldMeta] of Object.entries(table._meta.fields)) {
 		// Skip if user already provided a value
 		if (fieldName in data) continue;
 
-		const dbMeta = getDBMeta(fieldSchema as z.ZodTypeAny);
-
 		if (operation === "insert") {
 			// On insert: apply both inserted() and updated() expressions
-			if (dbMeta.inserted) {
-				if (!isDBExpression(dbMeta.inserted)) {
+			if (fieldMeta.inserted) {
+				if (!isDBExpression(fieldMeta.inserted)) {
 					throw new Error(
 						`Field "${fieldName}" has invalid inserted() value. Expected a DB expression (e.g., db.now()).`,
 					);
 				}
-				result[fieldName] = dbMeta.inserted;
-			} else if (dbMeta.updated) {
-				if (!isDBExpression(dbMeta.updated)) {
+				result[fieldName] = fieldMeta.inserted;
+			} else if (fieldMeta.updated) {
+				if (!isDBExpression(fieldMeta.updated)) {
 					throw new Error(
 						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
 					);
 				}
-				result[fieldName] = dbMeta.updated;
+				result[fieldName] = fieldMeta.updated;
 			}
 		} else {
 			// On update: only apply updated() expressions
-			if (dbMeta.updated) {
-				if (!isDBExpression(dbMeta.updated)) {
+			if (fieldMeta.updated) {
+				if (!isDBExpression(fieldMeta.updated)) {
 					throw new Error(
 						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
 					);
 				}
-				result[fieldName] = dbMeta.updated;
+				result[fieldName] = fieldMeta.updated;
 			}
 		}
 	}
@@ -173,20 +170,16 @@ export function encodeData<T extends Table<any>>(
 	data: Record<string, unknown>,
 ): Record<string, unknown> {
 	const encoded: Record<string, unknown> = {};
-	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
+	const shape = table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
+		const fieldMeta = table._meta.fields[key];
 		const fieldSchema = shape?.[key];
-		if (!fieldSchema) {
-			encoded[key] = value;
-			continue;
-		}
 
-		const dbMeta = getDBMeta(fieldSchema);
-		if (dbMeta.encode && typeof dbMeta.encode === "function") {
+		if (fieldMeta?.encode && typeof fieldMeta.encode === "function") {
 			// Custom encoding specified - use it
-			encoded[key] = dbMeta.encode(value);
-		} else {
+			encoded[key] = fieldMeta.encode(value);
+		} else if (fieldSchema) {
 			// Check if field is an object or array type - auto-encode as JSON
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
@@ -203,6 +196,8 @@ export function encodeData<T extends Table<any>>(
 			} else {
 				encoded[key] = value;
 			}
+		} else {
+			encoded[key] = value;
 		}
 	}
 
@@ -221,20 +216,16 @@ export function decodeData<T extends Table<any>>(
 	if (!data) return data;
 
 	const decoded: Record<string, unknown> = {};
-	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
+	const shape = table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
+		const fieldMeta = table._meta.fields[key];
 		const fieldSchema = shape?.[key];
-		if (!fieldSchema) {
-			decoded[key] = value;
-			continue;
-		}
 
-		const dbMeta = getDBMeta(fieldSchema);
-		if (dbMeta.decode && typeof dbMeta.decode === "function") {
+		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {
 			// Custom decoding specified - use it
-			decoded[key] = dbMeta.decode(value);
-		} else {
+			decoded[key] = fieldMeta.decode(value);
+		} else if (fieldSchema) {
 			// Check if field is an object or array type - auto-decode from JSON
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
@@ -270,6 +261,8 @@ export function decodeData<T extends Table<any>>(
 			} else {
 				decoded[key] = value;
 			}
+		} else {
+			decoded[key] = value;
 		}
 	}
 
