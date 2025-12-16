@@ -888,3 +888,236 @@ describe("Soft Delete", () => {
 		});
 	});
 });
+
+describe("DB Expressions", () => {
+	const {db} = require("./database.js");
+
+	const TimestampTable = table("timestamps", {
+		id: z.string().db.primary(),
+		name: z.string(),
+		createdAt: z.date(),
+		updatedAt: z.date().optional(),
+	});
+
+	const CounterTable = table("counters", {
+		id: z.string().db.primary(),
+		name: z.string(),
+		views: z.number().int().default(0),
+		likes: z.number().int().default(0),
+	});
+
+	describe("db.now()", () => {
+		test("insert with db.now() generates CURRENT_TIMESTAMP in SQL", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				createdAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.insert(TimestampTable, {
+				id: "123",
+				name: "Test",
+				createdAt: db.now(),
+			});
+
+			expect(driver.get).toHaveBeenCalledWith(
+				expect.stringContaining("CURRENT_TIMESTAMP"),
+				expect.any(Array),
+			);
+
+			// Values should NOT include the db.now() expression
+			const callArgs = (driver.get as any).mock.calls[0];
+			expect(callArgs[1]).toEqual(["123", "Test"]);
+		});
+
+		test("update with db.now() generates CURRENT_TIMESTAMP in SQL", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.update(TimestampTable, "123", {
+				updatedAt: db.now(),
+			});
+
+			expect(driver.get).toHaveBeenCalledWith(
+				expect.stringContaining('"updatedAt" = CURRENT_TIMESTAMP'),
+				expect.any(Array),
+			);
+		});
+
+		test("db.now() works alongside regular values in insert", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "456",
+				name: "Combined",
+				createdAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.insert(TimestampTable, {
+				id: "456",
+				name: "Combined",
+				createdAt: db.now(),
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+			const params = (driver.get as any).mock.calls[0][1];
+
+			// SQL should have placeholders for regular values and raw SQL for expression
+			expect(sql).toContain("VALUES (?, ?, CURRENT_TIMESTAMP)");
+			expect(params).toEqual(["456", "Combined"]);
+		});
+
+		test("db.now() works alongside regular values in update", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Updated",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.update(TimestampTable, "123", {
+				name: "Updated",
+				updatedAt: db.now(),
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+			expect(sql).toContain('"name" = ?');
+			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
+		});
+	});
+
+	describe("schema markers (.db.inserted() / .db.updated())", () => {
+		const AutoTable = table("auto", {
+			id: z.string().db.primary(),
+			name: z.string(),
+			createdAt: z.date().db.inserted(db.now()),
+			updatedAt: z.date().db.updated(db.now()),
+		});
+
+		test("insert auto-applies inserted() and updated() expressions", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			// Note: createdAt and updatedAt not provided
+			await database.insert(AutoTable, {
+				id: "123",
+				name: "Test",
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+			// Both should be set to CURRENT_TIMESTAMP
+			expect(sql).toContain("CURRENT_TIMESTAMP");
+			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(2);
+		});
+
+		test("update auto-applies updated() expression but not inserted()", async () => {
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Updated",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.update(AutoTable, "123", {
+				name: "Updated",
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+			// Only updatedAt should be set
+			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
+			// createdAt should NOT be in the SET clause
+			expect(sql).not.toContain('"createdAt"');
+		});
+
+		test("explicit value overrides schema marker on insert", async () => {
+			const driver = createMockDriver();
+			const specificDate = new Date("2020-01-01");
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				createdAt: specificDate.toISOString(),
+				updatedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.insert(AutoTable, {
+				id: "123",
+				name: "Test",
+				createdAt: specificDate, // explicit value
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+			const params = (driver.get as any).mock.calls[0][1];
+
+			// createdAt should be a parameter, not CURRENT_TIMESTAMP
+			// Params include: id, name, createdAt (Date encoded to ISO string)
+			expect(params.length).toBe(3);
+			// Should only have one CURRENT_TIMESTAMP (for updatedAt)
+			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(1);
+		});
+
+		test("explicit value overrides schema marker on update", async () => {
+			const driver = createMockDriver();
+			const specificDate = new Date("2020-01-01");
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				createdAt: new Date().toISOString(),
+				updatedAt: specificDate.toISOString(),
+			}));
+			const database = new Database(driver);
+
+			await database.update(AutoTable, "123", {
+				updatedAt: specificDate, // explicit value
+			});
+
+			const sql = (driver.get as any).mock.calls[0][0];
+
+			// updatedAt should be a parameter, not CURRENT_TIMESTAMP
+			expect(sql).not.toContain("CURRENT_TIMESTAMP");
+			expect(sql).toContain('"updatedAt" = ?');
+		});
+
+		test("inserted() only - update without data throws", async () => {
+			const InsertOnlyTable = table("insert_only", {
+				id: z.string().db.primary(),
+				createdAt: z.date().db.inserted(db.now()),
+			});
+
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				createdAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			// Insert should apply inserted()
+			await database.insert(InsertOnlyTable, {id: "123"});
+			const sql = (driver.get as any).mock.calls[0][0];
+			expect(sql).toContain("CURRENT_TIMESTAMP");
+
+			// Update with no data should throw since inserted() doesn't apply on update
+			await expect(
+				database.update(InsertOnlyTable, "123", {}),
+			).rejects.toThrow("No fields to update");
+		});
+	});
+});

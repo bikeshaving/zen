@@ -17,6 +17,118 @@ import {
 } from "./query.js";
 
 // ============================================================================
+// DB Expressions - Runtime values evaluated by the database
+// ============================================================================
+
+const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+
+/**
+ * A DB expression that gets injected as raw SQL, not parameterized.
+ */
+export interface DBExpression {
+	readonly [DB_EXPR]: true;
+	readonly sql: string;
+	/** For increment, the field name is needed to build "field + n" */
+	readonly field?: string;
+}
+
+/**
+ * Check if a value is a DB expression.
+ */
+export function isDBExpression(value: unknown): value is DBExpression {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		DB_EXPR in value &&
+		(value as any)[DB_EXPR] === true
+	);
+}
+
+/**
+ * DB expression helpers - runtime values evaluated by the database.
+ *
+ * @example
+ * await db.insert(Users, { id, name, createdAt: db.now() });
+ * await db.update(Users, id, { updatedAt: db.now() });
+ */
+export const db = {
+	/**
+	 * Current timestamp from the database server.
+	 * Evaluates to CURRENT_TIMESTAMP at query execution time.
+	 *
+	 * @example
+	 * await db.insert(Users, { id, name, createdAt: db.now() });
+	 * await db.update(Users, id, { updatedAt: db.now() });
+	 */
+	now(): DBExpression {
+		return {[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"};
+	},
+};
+
+/**
+ * Separate DB expressions from regular data values.
+ * DB expressions skip validation and encoding - they're raw SQL.
+ */
+function extractDBExpressions(data: Record<string, unknown>): {
+	regularData: Record<string, unknown>;
+	expressions: Record<string, DBExpression>;
+} {
+	const regularData: Record<string, unknown> = {};
+	const expressions: Record<string, DBExpression> = {};
+
+	for (const [key, value] of Object.entries(data)) {
+		if (isDBExpression(value)) {
+			expressions[key] = value;
+		} else {
+			regularData[key] = value;
+		}
+	}
+
+	return {regularData, expressions};
+}
+
+/**
+ * Inject schema-defined DB expressions for insert/update operations.
+ * Checks field metadata for .db.inserted() and .db.updated() markers.
+ *
+ * @param table - Table definition with schema metadata
+ * @param data - User-provided data
+ * @param operation - "insert" or "update"
+ * @returns Data with schema expressions injected (user values take precedence)
+ */
+function injectSchemaExpressions<T extends Table<any>>(
+	table: T,
+	data: Record<string, unknown>,
+	operation: "insert" | "update",
+): Record<string, unknown> {
+	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+	const result = {...data};
+
+	for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+		// Skip if user already provided a value
+		if (fieldName in data) continue;
+
+		const dbMeta = getDBMeta(fieldSchema as z.ZodTypeAny);
+
+		if (operation === "insert") {
+			// On insert: apply both inserted() and updated() expressions
+			if (dbMeta.inserted && isDBExpression(dbMeta.inserted)) {
+				result[fieldName] = dbMeta.inserted;
+			} else if (dbMeta.updated && isDBExpression(dbMeta.updated)) {
+				result[fieldName] = dbMeta.updated;
+			}
+		} else {
+			// On update: only apply updated() expressions
+			if (dbMeta.updated && isDBExpression(dbMeta.updated)) {
+				result[fieldName] = dbMeta.updated;
+			}
+		}
+	}
+
+	return result;
+}
+
+// ============================================================================
 // Encoding/Decoding
 // ============================================================================
 
@@ -113,6 +225,15 @@ export function decodeData<T extends Table<any>>(
 					}
 				} else {
 					// Already an object (e.g., from PostgreSQL JSONB)
+					decoded[key] = value;
+				}
+			} else if (core instanceof z.ZodDate) {
+				// Automatic date decoding from ISO string
+				if (typeof value === "string") {
+					decoded[key] = new Date(value);
+				} else if (value instanceof Date) {
+					decoded[key] = value;
+				} else {
 					decoded[key] = value;
 				}
 			} else {
@@ -808,37 +929,72 @@ export class Database extends EventTarget {
 			);
 		}
 
+		// Inject schema-defined expressions (inserted/updated) for fields not provided
+		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
+
+		// Separate DB expressions from regular data
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs);
+
+		// Validate and encode only regular data
+		// DB expression fields are excluded from validation since they're handled by the DB
+		let schema = table.schema;
+		if (Object.keys(expressions).length > 0) {
+			// Make expression fields optional for validation
+			const exprFields = Object.keys(expressions).reduce(
+				(acc, key) => {
+					acc[key] = (table.schema.shape as any)[key].optional();
+					return acc;
+				},
+				{} as Record<string, z.ZodTypeAny>,
+			);
+			schema = table.schema.extend(exprFields);
+		}
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
-			table.schema,
-			data,
+			schema,
+			regularData,
 		);
 		const encoded = encodeData(table, validated);
 
-		const columns = Object.keys(encoded);
-		const values = Object.values(encoded);
+		// Merge encoded regular data with expressions for column list
+		const allColumns = [...Object.keys(encoded), ...Object.keys(expressions)];
 		const tableName = this.#quoteIdent(table.name);
-		const columnList = columns.map((c) => this.#quoteIdent(c)).join(", ");
-		const placeholders = columns
-			.map((_, i) => this.#placeholder(i + 1))
-			.join(", ");
+		const columnList = allColumns.map((c) => this.#quoteIdent(c)).join(", ");
+
+		// Build values list: placeholders for regular values, raw SQL for expressions
+		const values: unknown[] = [];
+		const valueParts: string[] = [];
+		let paramIndex = 1;
+
+		for (const col of Object.keys(encoded)) {
+			valueParts.push(this.#placeholder(paramIndex++));
+			values.push(encoded[col]);
+		}
+
+		for (const col of Object.keys(expressions)) {
+			const expr = expressions[col];
+			valueParts.push(expr.sql);
+		}
+
+		const valuesClause = valueParts.join(", ");
 
 		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
 		if (this.#driver.dialect !== "mysql") {
-			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
 			const decoded = decodeData(table, row);
 			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 		}
 
 		// MySQL fallback: INSERT then SELECT to get DB defaults
-		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders})`;
+		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause})`;
 		await this.#driver.run(sql, values);
 
 		// Fetch the inserted row to get DB-applied defaults
 		const pk = table._meta.primary;
-		if (pk && encoded[pk] !== undefined) {
+		const pkValue = encoded[pk] ?? (expressions[pk] ? undefined : null);
+		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [encoded[pk]]);
+			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
 			if (row) {
 				const decoded = decodeData(table, row);
 				return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
@@ -867,25 +1023,44 @@ export class Database extends EventTarget {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
+		// Inject schema-defined expressions (updated) for fields not provided
+		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "update");
+
+		// Separate DB expressions from regular data
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs);
+
+		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			partialSchema,
-			data,
+			regularData,
 		);
 
-		const columns = Object.keys(validated);
-		if (columns.length === 0) {
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
 
 		const encoded = encodeData(table, validated);
-		const values = Object.values(encoded);
 		const tableName = this.#quoteIdent(table.name);
-		const setClause = columns
-			.map((c, i) => `${this.#quoteIdent(c)} = ${this.#placeholder(i + 1)}`)
-			.join(", ");
 
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(values.length + 1)}`;
+		// Build SET clause: mix of placeholders and raw SQL
+		const values: unknown[] = [];
+		const setParts: string[] = [];
+		let paramIndex = 1;
+
+		for (const col of Object.keys(encoded)) {
+			setParts.push(`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`);
+			values.push(encoded[col]);
+		}
+
+		for (const col of Object.keys(expressions)) {
+			const expr = expressions[col];
+			setParts.push(`${this.#quoteIdent(col)} = ${expr.sql}`);
+		}
+
+		const setClause = setParts.join(", ");
+		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(paramIndex)}`;
 
 		// Use RETURNING for SQLite/PostgreSQL
 		if (this.#driver.dialect !== "mysql") {
@@ -903,10 +1078,8 @@ export class Database extends EventTarget {
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
 		await this.#driver.run(sql, [...values, id]);
 
-		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
-			id,
-		]);
+		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
 		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;

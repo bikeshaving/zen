@@ -164,6 +164,10 @@ export interface FieldDbMeta {
 	decode?: (value: any) => any;
 	/** Explicit column type override for DDL generation */
 	columnType?: string;
+	/** DB expression to apply on insert (e.g., db.now()) */
+	inserted?: unknown;
+	/** DB expression to apply on insert and update (e.g., db.now()) */
+	updated?: unknown;
 }
 
 // ============================================================================
@@ -281,6 +285,28 @@ function createDbMethods(schema: ZodTypeAny) {
 			 */
 			type(columnType: string) {
 				return setDBMeta(schema, {columnType});
+			},
+
+			/**
+			 * Auto-apply a DB expression on insert.
+			 * Field becomes optional for insert - the expression provides the value.
+			 *
+			 * @example
+			 * createdAt: z.date().db.inserted(db.now())
+			 */
+			inserted(expr: unknown) {
+				return setDBMeta(schema, {inserted: expr});
+			},
+
+			/**
+			 * Auto-apply a DB expression on insert and update.
+			 * Field becomes optional for insert/update - the expression provides the value.
+			 *
+			 * @example
+			 * updatedAt: z.date().db.updated(db.now())
+			 */
+			updated(expr: unknown) {
+				return setDBMeta(schema, {updated: expr});
 			},
 		};
 }

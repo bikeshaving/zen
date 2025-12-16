@@ -60,6 +60,11 @@ export {
 	DatabaseUpgradeEvent,
 	type Driver,
 	type TaggedQuery,
+
+	// DB expressions (runtime values evaluated by database)
+	db,
+	isDBExpression,
+	type DBExpression,
 } from "./impl/database.js";
 
 export {
