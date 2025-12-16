@@ -612,34 +612,7 @@ export interface DerivedExpr {
 // ============================================================================
 
 /**
- * Condition operators for where/having clauses.
- */
-export type ConditionOperators<T> = {
-	$eq?: T;
-	$lt?: T;
-	$gt?: T;
-	$lte?: T;
-	$gte?: T;
-	$like?: string;
-	$in?: T[];
-	$neq?: T;
-	$isNull?: boolean;
-};
-
-/**
- * A condition value can be a plain value (shorthand for $eq) or an operator object.
- */
-export type ConditionValue<T> = T | ConditionOperators<T>;
-
-/**
- * Where conditions for a table - keys must exist in table schema.
- */
-export type WhereConditions<T extends Table<any>> = {
-	[K in keyof Infer<T>]?: ConditionValue<Infer<T>[K]>;
-};
-
-/**
- * Set values for updates - plain values only (no operators).
+ * Set values for updates - plain values only.
  */
 export type SetValues<T extends Table<any>> = {
 	[K in keyof Infer<T>]?: Infer<T>[K];
@@ -749,7 +722,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * Create a partial view of this table with only the specified fields.
 	 *
 	 * Useful for partial selects - the returned table-like object can be
-	 * passed to all(), get(), where(), etc. Cannot be used with insert().
+	 * passed to all(), get(), etc. Cannot be used with insert().
 	 *
 	 * @example
 	 * const PostSummary = Posts.pick('id', 'title', 'authorId');
@@ -807,19 +780,6 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly cols: {
 		[K in keyof z.infer<ZodObject<T>>]: ColumnFragment;
 	};
-
-	/**
-	 * Generate an AND-joined conditional fragment for WHERE clauses.
-	 *
-	 * Emits fully qualified column names to avoid ambiguity in JOINs.
-	 *
-	 * @example
-	 * db.all(Posts)`
-	 *   WHERE ${Posts.where({ published: true, viewCount: { $gte: 100 } })}
-	 * `
-	 * // → "posts"."published" = ? AND "posts"."viewCount" >= ?
-	 */
-	where(conditions: WhereConditions<Table<T>>): SQLFragment;
 
 	/**
 	 * Generate assignment fragment for UPDATE SET clauses.
@@ -1174,111 +1134,6 @@ function qualifiedColumn(tableName: string, fieldName: string): string {
 }
 
 /**
- * Check if a value is an operator object.
- */
-function isOperatorObject(
-	value: unknown,
-): value is ConditionOperators<unknown> {
-	if (value === null || typeof value !== "object") return false;
-	const keys = Object.keys(value);
-	return keys.length > 0 && keys.every((k) => k.startsWith("$"));
-}
-
-/**
- * Build a condition fragment for a single field.
- */
-function buildCondition(
-	column: string,
-	value: ConditionValue<unknown>,
-): {sql: string; params: unknown[]} {
-	if (isOperatorObject(value)) {
-		// Validate for conflicting operators
-		if (value.$eq !== undefined && value.$neq !== undefined) {
-			throw new Error(
-				`Conflicting operators: $eq and $neq cannot be used together on ${column}`,
-			);
-		}
-
-		// Check for impossible range: $gt >= $lt means nothing can satisfy both
-		if (
-			value.$gt !== undefined &&
-			value.$lt !== undefined &&
-			typeof value.$gt === "number" &&
-			typeof value.$lt === "number" &&
-			value.$gt >= value.$lt
-		) {
-			throw new Error(
-				`Impossible range conflict: $gt: ${value.$gt} and $lt: ${value.$lt} on ${column} cannot both be satisfied`,
-			);
-		}
-
-		// Check for impossible range: $gte > $lte
-		if (
-			value.$gte !== undefined &&
-			value.$lte !== undefined &&
-			typeof value.$gte === "number" &&
-			typeof value.$lte === "number" &&
-			value.$gte > value.$lte
-		) {
-			throw new Error(
-				`Impossible range conflict: $gte: ${value.$gte} and $lte: ${value.$lte} on ${column} cannot both be satisfied`,
-			);
-		}
-
-		const parts: string[] = [];
-		const params: unknown[] = [];
-
-		if (value.$eq !== undefined) {
-			parts.push(`${column} = ?`);
-			params.push(value.$eq);
-		}
-		if (value.$neq !== undefined) {
-			parts.push(`${column} != ?`);
-			params.push(value.$neq);
-		}
-		if (value.$lt !== undefined) {
-			parts.push(`${column} < ?`);
-			params.push(value.$lt);
-		}
-		if (value.$gt !== undefined) {
-			parts.push(`${column} > ?`);
-			params.push(value.$gt);
-		}
-		if (value.$gte !== undefined) {
-			parts.push(`${column} >= ?`);
-			params.push(value.$gte);
-		}
-		if (value.$lte !== undefined) {
-			parts.push(`${column} <= ?`);
-			params.push(value.$lte);
-		}
-		if (value.$like !== undefined) {
-			parts.push(`${column} LIKE ?`);
-			params.push(value.$like);
-		}
-		if (value.$in !== undefined && Array.isArray(value.$in)) {
-			const placeholders = value.$in.map(() => "?").join(", ");
-			parts.push(`${column} IN (${placeholders})`);
-			params.push(...value.$in);
-		}
-		if (value.$isNull !== undefined) {
-			parts.push(value.$isNull ? `${column} IS NULL` : `${column} IS NOT NULL`);
-		}
-
-		return {
-			sql: parts.join(" AND "),
-			params,
-		};
-	}
-
-	// Plain value = $eq shorthand
-	return {
-		sql: `${column} = ?`,
-		params: [value],
-	};
-}
-
-/**
  * Create a column fragment proxy for Table.cols access.
  */
 function createColsProxy(
@@ -1554,31 +1409,6 @@ function createTableObject(
 					options,
 				) as DerivedTable<any>;
 			};
-		},
-
-		where(conditions: Record<string, unknown>): SQLFragment {
-			const entries = Object.entries(conditions);
-			if (entries.length === 0) {
-				return createFragment("1 = 1", []);
-			}
-
-			const parts: string[] = [];
-			const params: unknown[] = [];
-
-			for (const [field, value] of entries) {
-				if (value === undefined) continue;
-
-				const column = qualifiedColumn(name, field);
-				const condition = buildCondition(column, value);
-				parts.push(condition.sql);
-				params.push(...condition.params);
-			}
-
-			if (parts.length === 0) {
-				return createFragment("1 = 1", []);
-			}
-
-			return createFragment(parts.join(" AND "), params);
 		},
 
 		set(values: Record<string, unknown>): SQLFragment {

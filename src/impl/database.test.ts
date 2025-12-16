@@ -25,28 +25,25 @@ const Posts = table("posts", {
 	published: z.boolean().default(false),
 });
 
-// Mock driver factory (default: SQLite-style escaping)
-function createMockDriver(
-	dialect: "sqlite" | "mysql" | "postgresql" = "sqlite",
-): Driver {
+// Helper to build SQL from template parts (for assertions)
+function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
+	let sql = strings[0];
+	for (let i = 1; i < strings.length; i++) {
+		sql += "?" + strings[i];
+	}
+	return sql;
+}
+
+// Mock driver factory
+function createMockDriver(supportsReturning = true): Driver {
 	const driver: Driver = {
-		dialect: dialect,
+		supportsReturning,
 		all: mock(async () => []) as Driver["all"],
 		get: mock(async () => null) as Driver["get"],
 		run: mock(async () => 1) as Driver["run"],
 		val: mock(async () => 0) as Driver["val"],
-		escapeIdentifier: (name: string) => {
-			if (dialect === "mysql") {
-				return `\`${name.replace(/`/g, "``")}\``;
-			}
-			return `"${name.replace(/"/g, '""')}"`;
-		},
 		close: mock(async () => {}),
 		transaction: mock(async (fn) => await fn(driver)) as Driver["transaction"],
-		insert: mock(async (_tableName, data) => data) as Driver["insert"],
-		update: mock(
-			async (_tableName, _pk, _id, data) => data,
-		) as Driver["update"],
 	};
 	return driver;
 }
@@ -85,11 +82,12 @@ describe("Database", () => {
 			expect((results[0] as any).author.name).toBe("Alice");
 
 			// Check SQL was called correctly
-			const [sql, params] = (driver.all as any).mock.calls[0];
+			const [strings, values] = (driver.all as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('SELECT "posts"."id" AS "posts.id"');
 			expect(sql).toContain('FROM "posts"');
 			expect(sql).toContain("WHERE published = ?");
-			expect(params).toEqual([true]);
+			expect(values).toEqual([true]);
 		});
 
 		test("returns empty array for no results", async () => {
@@ -132,10 +130,11 @@ describe("Database", () => {
 			expect(post!.title).toBe("Test Post");
 
 			// Check SQL was called with primary key
-			const [sql, params] = (driver.get as any).mock.calls[0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('SELECT * FROM "posts"');
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(params).toEqual([POST_ID]);
+			expect(values).toEqual([POST_ID]);
 		});
 
 		test("returns null for no match", async () => {
@@ -173,12 +172,13 @@ describe("Database", () => {
 			expect(user.email).toBe("alice@example.com");
 
 			// Check SQL uses RETURNING (sqlite default)
-			const [sql, params] = (driver.get as any).mock.calls[0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('INSERT INTO "users"');
 			expect(sql).toContain('"id", "email", "name"');
 			expect(sql).toContain("VALUES (?, ?, ?)");
 			expect(sql).toContain("RETURNING *");
-			expect(params).toEqual([USER_ID, "alice@example.com", "Alice"]);
+			expect(values).toEqual([USER_ID, "alice@example.com", "Alice"]);
 		});
 
 		test("validates through Zod schema", async () => {
@@ -536,22 +536,23 @@ describe("Database", () => {
 				name: "Alice Updated",
 			}));
 
-			const user = await db.update(Users, USER_ID, {name: "Alice Updated"});
+			const user = await db.update(Users, {name: "Alice Updated"}, USER_ID);
 
 			expect(user).not.toBeNull();
 			expect(user!.name).toBe("Alice Updated");
 
 			// Check SQL uses RETURNING (sqlite default)
-			const [sql, params] = (driver.get as any).mock.calls[0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('UPDATE "users"');
 			expect(sql).toContain('SET "name" = ?');
 			expect(sql).toContain('WHERE "id" = ?');
 			expect(sql).toContain("RETURNING *");
-			expect(params).toEqual(["Alice Updated", USER_ID]);
+			expect(values).toEqual(["Alice Updated", USER_ID]);
 		});
 
 		test("throws on no fields to update", async () => {
-			await expect(db.update(Users, USER_ID, {})).rejects.toThrow(
+			await expect(db.update(Users, {}, USER_ID)).rejects.toThrow(
 				"No fields to update",
 			);
 		});
@@ -559,7 +560,7 @@ describe("Database", () => {
 		test("returns null if entity not found after update", async () => {
 			(driver.get as any).mockImplementation(async () => null);
 
-			const user = await db.update(Users, "nonexistent", {name: "Test"});
+			const user = await db.update(Users, {name: "Test"}, "nonexistent");
 
 			expect(user).toBeNull();
 		});
@@ -568,7 +569,7 @@ describe("Database", () => {
 			const UsersWithStats = Users.derive("postCount", z.number())`COUNT(*)`;
 
 			await expect(
-				db.update(UsersWithStats as any, USER_ID, {name: "Alice Updated"}),
+				db.update(UsersWithStats as any, {name: "Alice Updated"}, USER_ID),
 			).rejects.toThrow('Cannot update derived table "users"');
 		});
 	});
@@ -579,20 +580,21 @@ describe("Database", () => {
 
 			const deleted = await db.delete(Users, USER_ID);
 
-			expect(deleted).toBe(true);
+			expect(deleted).toBe(1);
 
-			const [sql, params] = (driver.run as any).mock.calls[0];
+			const [strings, values] = (driver.run as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('DELETE FROM "users"');
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(params).toEqual([USER_ID]);
+			expect(values).toEqual([USER_ID]);
 		});
 
-		test("returns false if nothing deleted", async () => {
+		test("returns 0 if nothing deleted", async () => {
 			(driver.run as any).mockImplementation(async () => 0);
 
 			const deleted = await db.delete(Users, "nonexistent");
 
-			expect(deleted).toBe(false);
+			expect(deleted).toBe(0);
 		});
 	});
 
@@ -606,11 +608,12 @@ describe("Database", () => {
 
 			expect(results[0].count).toBe(5);
 
-			const [sql, params] = (driver.all as any).mock.calls[0];
-			expect(sql).toBe(
+			const [strings, values] = (driver.all as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			expect(sql).toContain(
 				"SELECT COUNT(*) as count FROM posts WHERE author_id = ?",
 			);
-			expect(params).toEqual([USER_ID]);
+			expect(values).toEqual([USER_ID]);
 		});
 	});
 
@@ -620,8 +623,8 @@ describe("Database", () => {
 
 			await db.exec`CREATE TABLE IF NOT EXISTS test (id TEXT PRIMARY KEY)`;
 
-			const [sql] = (driver.run as any).mock.calls[0];
-			expect(sql).toContain("CREATE TABLE");
+			const [strings] = (driver.run as any).mock.calls[0];
+			expect(strings.join("")).toContain("CREATE TABLE");
 		});
 	});
 
@@ -636,38 +639,10 @@ describe("Database", () => {
 	});
 });
 
-describe("PostgreSQL dialect", () => {
-	test("uses numbered placeholders", async () => {
-		const driver = createMockDriver("postgresql");
-		const db = new Database(driver);
-
-		await db.query`SELECT * FROM users WHERE id = ${USER_ID} AND active = ${true}`;
-
-		const [sql] = (driver.all as any).mock.calls[0];
-		expect(sql).toContain("$1");
-		expect(sql).toContain("$2");
-		expect(sql).not.toContain("?");
-	});
-});
-
-describe("MySQL dialect", () => {
-	test("uses backtick quoting", async () => {
-		const driver = createMockDriver("mysql");
-		const db = new Database(driver);
-
-		await db.insert(Users, {
-			id: USER_ID,
-			email: "test@example.com",
-			name: "Test",
-		});
-
-		const [sql] = (driver.run as any).mock.calls[0];
-		expect(sql).toContain("INSERT INTO `users`");
-		expect(sql).toContain("`id`, `email`, `name`");
-	});
-
-	test("insert() fetches row after INSERT to get DB defaults", async () => {
-		const driver = createMockDriver("mysql");
+describe("supportsReturning fallback", () => {
+	test("insert() uses INSERT + SELECT when RETURNING not supported", async () => {
+		// Create a driver that doesn't support RETURNING (like MySQL)
+		const driver = createMockDriver(false);
 		const db = new Database(driver);
 
 		const TableWithDefaults = table("with_defaults", {
@@ -677,9 +652,9 @@ describe("MySQL dialect", () => {
 			version: z.number().default(0),
 		});
 
-		// MySQL doesn't support RETURNING, so it should:
-		// 1. INSERT the row
-		// 2. SELECT the row back to get DB-applied defaults
+		// Without RETURNING, it should:
+		// 1. INSERT the row (run)
+		// 2. SELECT the row back (get) to get DB-applied defaults
 		(driver.run as any).mockImplementation(async () => 1);
 		(driver.get as any).mockImplementation(async () => ({
 			id: "test-id",
@@ -697,27 +672,49 @@ describe("MySQL dialect", () => {
 		expect(result.version).toBe(1);
 		expect(result.metadata).toEqual({source: "db-trigger"});
 
-		// Verify SELECT was called after INSERT
+		// Verify both INSERT (run) and SELECT (get) were called
+		expect((driver.run as any).mock.calls.length).toBe(1);
 		expect((driver.get as any).mock.calls.length).toBe(1);
-		const [selectSql] = (driver.get as any).mock.calls[0];
+
+		// Check INSERT was called
+		const [insertStrings] = (driver.run as any).mock.calls[0];
+		const insertSql = buildSQL(insertStrings, []);
+		expect(insertSql).toContain("INSERT INTO");
+		expect(insertSql).toContain('"with_defaults"');
+
+		// Check SELECT was called after INSERT
+		const [selectStrings] = (driver.get as any).mock.calls[0];
+		const selectSql = buildSQL(selectStrings, []);
 		expect(selectSql).toContain("SELECT");
-		expect(selectSql).toContain("`with_defaults`");
-	});
-});
-
-describe("escapeIdentifier", () => {
-	test("SQLite/PostgreSQL escapes double quotes", () => {
-		const driver = createMockDriver("sqlite");
-		expect(driver.escapeIdentifier("users")).toBe('"users"');
-		expect(driver.escapeIdentifier('table"name')).toBe('"table""name"');
-		expect(driver.escapeIdentifier('foo"bar"baz')).toBe('"foo""bar""baz"');
+		expect(selectSql).toContain('"with_defaults"');
 	});
 
-	test("MySQL escapes backticks", () => {
-		const driver = createMockDriver("mysql");
-		expect(driver.escapeIdentifier("users")).toBe("`users`");
-		expect(driver.escapeIdentifier("table`name")).toBe("`table``name`");
-		expect(driver.escapeIdentifier("foo`bar`baz")).toBe("`foo``bar``baz`");
+	test("insert() uses RETURNING when supported", async () => {
+		// Create a driver that supports RETURNING (like PostgreSQL/SQLite)
+		const driver = createMockDriver(true);
+		const db = new Database(driver);
+
+		// With RETURNING, it should use get() for INSERT...RETURNING
+		(driver.get as any).mockImplementation(async () => ({
+			id: USER_ID,
+			email: "test@example.com",
+			name: "Test",
+		}));
+
+		await db.insert(Users, {
+			id: USER_ID,
+			email: "test@example.com",
+			name: "Test",
+		});
+
+		// Should only call get (for INSERT...RETURNING), not run
+		expect((driver.get as any).mock.calls.length).toBe(1);
+		expect((driver.run as any).mock.calls.length).toBe(0);
+
+		// Check RETURNING was added
+		const [strings] = (driver.get as any).mock.calls[0];
+		const sql = buildSQL(strings, []);
+		expect(sql).toContain("RETURNING *");
 	});
 });
 
@@ -814,18 +811,24 @@ describe("transaction()", () => {
 			});
 
 			// Check SQL contains CURRENT_TIMESTAMP for both fields
-			const insertSql = (driver.get as any).mock.calls[0][0];
+			const [insertStrings, insertValues] = (driver.get as any).mock.calls[0];
+			const insertSql = buildSQL(insertStrings, insertValues);
 			expect(insertSql).toContain("CURRENT_TIMESTAMP");
 			expect(insertSql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(2);
 
 			// Update without providing updatedAt
 			(driver.get as any).mockClear();
-			await tx.update(AutoTable, "123", {
-				name: "Updated",
-			});
+			await tx.update(
+				AutoTable,
+				{
+					name: "Updated",
+				},
+				"123",
+			);
 
 			// Check SQL contains CURRENT_TIMESTAMP for updatedAt
-			const updateSql = (driver.get as any).mock.calls[0][0];
+			const [updateStrings, updateValues] = (driver.get as any).mock.calls[0];
+			const updateSql = buildSQL(updateStrings, updateValues);
 			expect(updateSql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 			expect(updateSql).not.toContain('"createdAt"');
 		});
@@ -892,7 +895,8 @@ describe("Soft Delete", () => {
 
 			await db.all(SoftDeleteUsers)`WHERE NOT (${SoftDeleteUsers.deleted()})`;
 
-			const [sql] = (driver.all as any).mock.calls[0];
+			const [strings, values] = (driver.all as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('"soft_delete_users"."deletedAt" IS NOT NULL');
 		});
 	});
@@ -911,25 +915,26 @@ describe("Soft Delete", () => {
 
 			const deleted = await db.softDelete(SoftDeleteUsers, USER_ID);
 
-			expect(deleted).toBe(true);
+			expect(deleted).toBe(1);
 
-			const [sql, params] = (driver.run as any).mock.calls[0];
+			const [strings, values] = (driver.run as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('UPDATE "soft_delete_users"');
 			// Should use DB's CURRENT_TIMESTAMP, not app-side Date
 			// This ensures consistent timestamps in distributed systems
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
 			// Only the ID should be a parameter, not the timestamp
-			expect(params).toHaveLength(1);
-			expect(params[0]).toBe(USER_ID);
+			expect(values).toHaveLength(1);
+			expect(values[0]).toBe(USER_ID);
 		});
 
-		test("returns false if entity not found", async () => {
+		test("returns 0 if entity not found", async () => {
 			(driver.run as any).mockImplementation(async () => 0);
 
 			const deleted = await db.softDelete(SoftDeleteUsers, "nonexistent");
 
-			expect(deleted).toBe(false);
+			expect(deleted).toBe(0);
 		});
 
 		test("throws if table has no primary key", async () => {
@@ -943,13 +948,14 @@ describe("Soft Delete", () => {
 			);
 		});
 
-		test("throws if table has no soft delete field", async () => {
+		test("throws if table has no soft delete field", () => {
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
 				name: z.string(),
 			});
 
-			await expect(db.softDelete(NormalTable, "123")).rejects.toThrow(
+			// softDelete throws synchronously for configuration errors
+			expect(() => db.softDelete(NormalTable, "123")).toThrow(
 				"Table normal does not have a soft delete field",
 			);
 		});
@@ -968,7 +974,8 @@ describe("Soft Delete", () => {
 
 			await db.softDelete(SoftDeleteWithUpdatedAt, "123");
 
-			const [sql] = (driver.run as any).mock.calls[0];
+			const [strings, values] = (driver.run as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			// Should set both deletedAt and updatedAt
 			expect(sql).toContain('"deletedAt" = CURRENT_TIMESTAMP');
 			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
@@ -986,19 +993,20 @@ describe("Soft Delete", () => {
 				return deleted;
 			});
 
-			expect(result).toBe(true);
+			expect(result).toBe(1);
 
 			// Check transaction was called
 			expect((driver.transaction as any).mock.calls.length).toBe(1);
 
 			// Check UPDATE was called with DB timestamp
-			const [sql, params] = (driver.run as any).mock.calls[0];
+			const [strings, values] = (driver.run as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('UPDATE "soft_delete_users"');
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
 			// Only ID should be parameterized, not the timestamp
-			expect(params).toHaveLength(1);
-			expect(params[0]).toBe(USER_ID);
+			expect(values).toHaveLength(1);
+			expect(values[0]).toBe(USER_ID);
 		});
 
 		test("throws if table has no soft delete field", async () => {
@@ -1034,7 +1042,8 @@ describe("Soft Delete", () => {
 				await tx.softDelete(SoftDeleteWithUpdatedAt, "123");
 			});
 
-			const [sql] = (driver.run as any).mock.calls[0];
+			const [strings, values] = (driver.run as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			// Should set both deletedAt and updatedAt
 			expect(sql).toContain('"deletedAt" = CURRENT_TIMESTAMP');
 			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
@@ -1093,14 +1102,12 @@ describe("DB Expressions", () => {
 				createdAt: db.now(),
 			});
 
-			expect(driver.get).toHaveBeenCalledWith(
-				expect.stringContaining("CURRENT_TIMESTAMP"),
-				expect.any(Array),
-			);
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			expect(sql).toContain("CURRENT_TIMESTAMP");
 
 			// Values should NOT include the db.now() expression
-			const callArgs = (driver.get as any).mock.calls[0];
-			expect(callArgs[1]).toEqual(["123", "Test"]);
+			expect(values).toEqual(["123", "Test"]);
 		});
 
 		test("update with db.now() generates CURRENT_TIMESTAMP in SQL", async () => {
@@ -1113,14 +1120,17 @@ describe("DB Expressions", () => {
 			}));
 			const database = new Database(driver);
 
-			await database.update(TimestampTable, "123", {
-				updatedAt: db.now(),
-			});
-
-			expect(driver.get).toHaveBeenCalledWith(
-				expect.stringContaining('"updatedAt" = CURRENT_TIMESTAMP'),
-				expect.any(Array),
+			await database.update(
+				TimestampTable,
+				{
+					updatedAt: db.now(),
+				},
+				"123",
 			);
+
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 		});
 
 		test("db.now() works alongside regular values in insert", async () => {
@@ -1138,12 +1148,12 @@ describe("DB Expressions", () => {
 				createdAt: db.now(),
 			});
 
-			const sql = (driver.get as any).mock.calls[0][0];
-			const params = (driver.get as any).mock.calls[0][1];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 
 			// SQL should have placeholders for regular values and raw SQL for expression
 			expect(sql).toContain("VALUES (?, ?, CURRENT_TIMESTAMP)");
-			expect(params).toEqual(["456", "Combined"]);
+			expect(values).toEqual(["456", "Combined"]);
 		});
 
 		test("db.now() works alongside regular values in update", async () => {
@@ -1156,12 +1166,17 @@ describe("DB Expressions", () => {
 			}));
 			const database = new Database(driver);
 
-			await database.update(TimestampTable, "123", {
-				name: "Updated",
-				updatedAt: db.now(),
-			});
+			await database.update(
+				TimestampTable,
+				{
+					name: "Updated",
+					updatedAt: db.now(),
+				},
+				"123",
+			);
 
-			const sql = (driver.get as any).mock.calls[0][0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain('"name" = ?');
 			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 		});
@@ -1191,7 +1206,8 @@ describe("DB Expressions", () => {
 				name: "Test",
 			});
 
-			const sql = (driver.get as any).mock.calls[0][0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			// Both should be set to CURRENT_TIMESTAMP
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(2);
@@ -1207,11 +1223,16 @@ describe("DB Expressions", () => {
 			}));
 			const database = new Database(driver);
 
-			await database.update(AutoTable, "123", {
-				name: "Updated",
-			});
+			await database.update(
+				AutoTable,
+				{
+					name: "Updated",
+				},
+				"123",
+			);
 
-			const sql = (driver.get as any).mock.calls[0][0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			// Only updatedAt should be set
 			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 			// createdAt should NOT be in the SET clause
@@ -1235,12 +1256,12 @@ describe("DB Expressions", () => {
 				createdAt: specificDate, // explicit value
 			});
 
-			const sql = (driver.get as any).mock.calls[0][0];
-			const params = (driver.get as any).mock.calls[0][1];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 
 			// createdAt should be a parameter, not CURRENT_TIMESTAMP
 			// Params include: id, name, createdAt (Date encoded to ISO string)
-			expect(params.length).toBe(3);
+			expect(values.length).toBe(3);
 			// Should only have one CURRENT_TIMESTAMP (for updatedAt)
 			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(1);
 		});
@@ -1256,11 +1277,16 @@ describe("DB Expressions", () => {
 			}));
 			const database = new Database(driver);
 
-			await database.update(AutoTable, "123", {
-				updatedAt: specificDate, // explicit value
-			});
+			await database.update(
+				AutoTable,
+				{
+					updatedAt: specificDate, // explicit value
+				},
+				"123",
+			);
 
-			const sql = (driver.get as any).mock.calls[0][0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 
 			// updatedAt should be a parameter, not CURRENT_TIMESTAMP
 			expect(sql).not.toContain("CURRENT_TIMESTAMP");
@@ -1282,11 +1308,12 @@ describe("DB Expressions", () => {
 
 			// Insert should apply inserted()
 			await database.insert(InsertOnlyTable, {id: "123"});
-			const sql = (driver.get as any).mock.calls[0][0];
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 
 			// Update with no data should throw since inserted() doesn't apply on update
-			await expect(database.update(InsertOnlyTable, "123", {})).rejects.toThrow(
+			await expect(database.update(InsertOnlyTable, {}, "123")).rejects.toThrow(
 				"No fields to update",
 			);
 		});

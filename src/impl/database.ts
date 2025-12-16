@@ -9,11 +9,10 @@ import type {Table, Infer, Insert, FullTableOnly} from "./table.js";
 import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
 import {
-	createQuery,
-	parseTemplate,
 	normalize,
 	normalizeOne,
-	type SQLDialect,
+	isSQLFragment,
+	type SQLFragment,
 } from "./query.js";
 
 // ============================================================================
@@ -294,47 +293,50 @@ export function decodeData<T extends Table<any>>(
 /**
  * Database driver interface.
  *
- * Each driver implements this interface as a class with a specific name
- * (e.g., SQLiteDriver, PostgresDriver) and is exported as the default export.
+ * Drivers own all SQL generation and dialect-specific behavior. They receive
+ * template parts (strings + values) and build SQL with native placeholders.
  *
- * Drivers own all SQL generation and dialect-specific behavior.
+ * This keeps the Database class dialect-agnostic - it only interacts with
+ * drivers through this interface and the `supportsReturning` capability flag.
  */
 export interface Driver {
-	/**
-	 * SQL dialect for this driver.
-	 */
-	readonly dialect: SQLDialect;
+	// ==========================================================================
+	// Query execution (drivers build SQL with native placeholders)
+	// ==========================================================================
 
 	/**
 	 * Execute a query and return all rows.
+	 * Driver joins strings with native placeholders (? or $1, $2, ...).
 	 */
 	all<T = Record<string, unknown>>(
-		sql: string,
-		params: unknown[],
+		strings: TemplateStringsArray,
+		values: unknown[],
 	): Promise<T[]>;
 
 	/**
 	 * Execute a query and return the first row.
 	 */
 	get<T = Record<string, unknown>>(
-		sql: string,
-		params: unknown[],
+		strings: TemplateStringsArray,
+		values: unknown[],
 	): Promise<T | null>;
 
 	/**
 	 * Execute a statement and return the number of affected rows.
 	 */
-	run(sql: string, params: unknown[]): Promise<number>;
+	run(strings: TemplateStringsArray, values: unknown[]): Promise<number>;
 
 	/**
 	 * Execute a query and return a single value, or null if no rows.
 	 */
-	val<T = unknown>(sql: string, params: unknown[]): Promise<T | null>;
+	val<T = unknown>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null>;
 
-	/**
-	 * Escape an identifier (table name, column name) for safe SQL interpolation.
-	 */
-	escapeIdentifier(name: string): string;
+	// ==========================================================================
+	// Connection management
+	// ==========================================================================
 
 	/**
 	 * Close the database connection.
@@ -343,72 +345,368 @@ export interface Driver {
 
 	/**
 	 * Execute a function within a database transaction.
-	 *
-	 * Drivers implement this using their native transaction API to ensure
-	 * all operations use the same connection.
-	 *
-	 * If the function completes successfully, the transaction is committed.
-	 * If the function throws an error, the transaction is rolled back.
-	 *
-	 * @param fn - Callback that receives a transaction-bound driver. All operations
-	 *             within the callback MUST use this driver to ensure they run on
-	 *             the same connection.
 	 */
 	transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T>;
 
-	/**
-	 * Insert a row and return the full row (including DB defaults/generated values).
-	 *
-	 * @param tableName - The table name
-	 * @param data - Validated column-value pairs to insert
-	 * @returns The inserted row with all columns (including defaults)
-	 */
-	insert(
-		tableName: string,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown>>;
+	// ==========================================================================
+	// Capabilities
+	// ==========================================================================
 
 	/**
-	 * Update a row and return the updated row.
-	 *
-	 * @param tableName - The table name
-	 * @param primaryKey - The primary key column name
-	 * @param id - The primary key value
-	 * @param data - Validated column-value pairs to update
-	 * @returns The updated row, or null if not found
+	 * Whether this driver supports RETURNING clause for INSERT/UPDATE.
+	 * - SQLite: true
+	 * - PostgreSQL: true
+	 * - MySQL: false
+	 * - MariaDB 10.5+: true
 	 */
-	update(
-		tableName: string,
-		primaryKey: string,
-		id: unknown,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown> | null>;
+	readonly supportsReturning: boolean;
+
+	// ==========================================================================
+	// Optional capabilities
+	// ==========================================================================
 
 	/**
 	 * Execute a function while holding an exclusive migration lock.
-	 *
-	 * Optional — implement this using dialect-appropriate locking:
-	 * - PostgreSQL: pg_advisory_lock
-	 * - MySQL: GET_LOCK
-	 * - SQLite: BEGIN EXCLUSIVE
 	 */
 	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
+}
 
-	/**
-	 * Run EXPLAIN on a query to see the database's query plan.
-	 *
-	 * Optional — implement using dialect-appropriate EXPLAIN syntax:
-	 * - SQLite: EXPLAIN QUERY PLAN
-	 * - PostgreSQL/MySQL: EXPLAIN
-	 *
-	 * @param query - The SQL query to explain
-	 * @param params - Query parameters
-	 * @returns Array of query plan rows (structure varies by database)
-	 */
-	explain?(
-		query: string,
-		params: unknown[],
-	): Promise<Record<string, unknown>[]>;
+// ============================================================================
+// Template Building Helpers
+// ============================================================================
+
+/**
+ * Build a TemplateStringsArray from string parts.
+ * Used to construct queries programmatically while still using the driver's
+ * template-based interface.
+ */
+function makeTemplate(parts: string[]): TemplateStringsArray {
+	return Object.assign([...parts], {raw: parts}) as TemplateStringsArray;
+}
+
+/**
+ * Quote an identifier (table name, column name) using SQL standard double quotes.
+ * All drivers use this - MySQL requires ANSI_QUOTES mode.
+ */
+function quoteIdent(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Build INSERT template: INSERT INTO "table" ("col1", "col2") VALUES (?, ?)
+ * Returns template parts and values array.
+ */
+function buildInsertParts(
+	tableName: string,
+	data: Record<string, unknown>,
+	expressions: Record<string, DBExpression>,
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const regularCols = Object.keys(data);
+	const exprCols = Object.keys(expressions);
+	const allCols = [...regularCols, ...exprCols];
+
+	const columnList = allCols.map((c) => quoteIdent(c)).join(", ");
+
+	// Build value placeholders: regular values get ?, expressions get raw SQL
+	const valueParts: string[] = [];
+	for (let i = 0; i < regularCols.length; i++) {
+		valueParts.push(i === 0 ? "" : ", ");
+	}
+	for (const col of exprCols) {
+		valueParts.push(
+			valueParts.length === 0
+				? expressions[col].sql
+				: `, ${expressions[col].sql}`,
+		);
+	}
+
+	// Template: INSERT INTO "table" ("cols") VALUES (<placeholder>, <placeholder>, ...)
+	// For 2 regular values: ["INSERT INTO ... VALUES (", ", ", ")"]
+	const parts: string[] = [
+		`INSERT INTO ${quoteIdent(tableName)} (${columnList}) VALUES (`,
+	];
+	for (let i = 1; i < regularCols.length; i++) {
+		parts.push(", ");
+	}
+	// Add expression SQL inline (not parameterized)
+	const exprSql = exprCols.map((c) => expressions[c].sql).join(", ");
+	if (regularCols.length > 0 && exprCols.length > 0) {
+		parts.push(`, ${exprSql})`);
+	} else if (exprCols.length > 0) {
+		parts[0] += `${exprSql})`;
+	} else {
+		parts.push(")");
+	}
+
+	return {
+		strings: makeTemplate(parts),
+		values: regularCols.map((c) => data[c]),
+	};
+}
+
+/**
+ * Build UPDATE template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
+ * Returns template parts and values array.
+ */
+function buildUpdateByIdParts(
+	tableName: string,
+	pk: string,
+	data: Record<string, unknown>,
+	expressions: Record<string, DBExpression>,
+	id: unknown,
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const regularCols = Object.keys(data);
+	const exprCols = Object.keys(expressions);
+
+	// Build SET clause
+	const setParts: string[] = [];
+	for (const col of regularCols) {
+		setParts.push(`${quoteIdent(col)} = `);
+	}
+	for (const col of exprCols) {
+		setParts.push(`${quoteIdent(col)} = ${expressions[col].sql}`);
+	}
+
+	// Template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
+	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
+	for (let i = 0; i < regularCols.length; i++) {
+		if (i === 0) {
+			parts[0] += `${quoteIdent(regularCols[i])} = `;
+		} else {
+			parts.push(`, ${quoteIdent(regularCols[i])} = `);
+		}
+	}
+	// Add expression assignments
+	const exprAssignments = exprCols
+		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
+		.join(", ");
+	if (regularCols.length > 0 && exprCols.length > 0) {
+		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} = `);
+	} else if (exprCols.length > 0) {
+		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} = `;
+	} else {
+		parts.push(` WHERE ${quoteIdent(pk)} = `);
+	}
+	parts.push("");
+
+	return {
+		strings: makeTemplate(parts),
+		values: [...regularCols.map((c) => data[c]), id],
+	};
+}
+
+/**
+ * Build UPDATE template for multiple IDs: UPDATE "table" SET ... WHERE "pk" IN (?, ?, ?)
+ */
+function buildUpdateByIdsParts(
+	tableName: string,
+	pk: string,
+	data: Record<string, unknown>,
+	expressions: Record<string, DBExpression>,
+	ids: unknown[],
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const regularCols = Object.keys(data);
+	const exprCols = Object.keys(expressions);
+
+	// Build SET clause parts
+	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
+	for (let i = 0; i < regularCols.length; i++) {
+		if (i === 0) {
+			parts[0] += `${quoteIdent(regularCols[i])} = `;
+		} else {
+			parts.push(`, ${quoteIdent(regularCols[i])} = `);
+		}
+	}
+
+	// Add expression assignments
+	const exprAssignments = exprCols
+		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
+		.join(", ");
+
+	if (regularCols.length > 0 && exprCols.length > 0) {
+		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} IN (`);
+	} else if (exprCols.length > 0) {
+		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} IN (`;
+	} else {
+		parts.push(` WHERE ${quoteIdent(pk)} IN (`);
+	}
+
+	// Add ID placeholders
+	for (let i = 1; i < ids.length; i++) {
+		parts.push(", ");
+	}
+	parts.push(")");
+
+	return {
+		strings: makeTemplate(parts),
+		values: [...regularCols.map((c) => data[c]), ...ids],
+	};
+}
+
+/**
+ * Build SELECT column list: "table"."col1" AS "table.col1", "table"."col2" AS "table.col2", ...
+ * Handles derived expressions too.
+ */
+function buildSelectCols(tables: Table<any>[]): {
+	sql: string;
+	params: unknown[];
+} {
+	const columns: string[] = [];
+	const params: unknown[] = [];
+
+	for (const table of tables) {
+		const tableName = table.name;
+		const shape = table.schema.shape;
+
+		// Get derived fields set (for skipping in regular column output)
+		const derivedFields = new Set<string>(
+			(table.meta as any).derivedFields ?? [],
+		);
+
+		// Add regular columns (skip derived fields - they come from expressions)
+		for (const fieldName of Object.keys(shape)) {
+			if (derivedFields.has(fieldName)) continue;
+
+			const qualifiedCol = `${quoteIdent(tableName)}.${quoteIdent(fieldName)}`;
+			const alias = `${tableName}.${fieldName}`;
+			columns.push(`${qualifiedCol} AS ${quoteIdent(alias)}`);
+		}
+
+		// Append derived expressions with auto-generated aliases
+		const derivedExprs = (table.meta as any).derivedExprs ?? [];
+		for (const expr of derivedExprs) {
+			const alias = `${tableName}.${expr.fieldName}`;
+			columns.push(`(${expr.sql}) AS ${quoteIdent(alias)}`);
+			params.push(...expr.params);
+		}
+	}
+
+	return {sql: columns.join(", "), params};
+}
+
+/**
+ * Build SELECT by primary key template: SELECT * FROM "table" WHERE "pk" = ?
+ */
+function buildSelectByPkParts(
+	tableName: string,
+	pk: string,
+	id: unknown,
+): {strings: TemplateStringsArray; values: unknown[]} {
+	return {
+		strings: makeTemplate([
+			`SELECT * FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} = `,
+			"",
+		]),
+		values: [id],
+	};
+}
+
+/**
+ * Build SELECT by multiple IDs: SELECT * FROM "table" WHERE "pk" IN (?, ?, ?)
+ */
+function buildSelectByPksParts(
+	tableName: string,
+	pk: string,
+	ids: unknown[],
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const parts: string[] = [
+		`SELECT * FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} IN (`,
+	];
+	for (let i = 1; i < ids.length; i++) {
+		parts.push(", ");
+	}
+	parts.push(")");
+
+	return {
+		strings: makeTemplate(parts),
+		values: ids,
+	};
+}
+
+/**
+ * Build DELETE by primary key template: DELETE FROM "table" WHERE "pk" = ?
+ */
+function buildDeleteByPkParts(
+	tableName: string,
+	pk: string,
+	id: unknown,
+): {strings: TemplateStringsArray; values: unknown[]} {
+	return {
+		strings: makeTemplate([
+			`DELETE FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} = `,
+			"",
+		]),
+		values: [id],
+	};
+}
+
+/**
+ * Build DELETE by multiple IDs: DELETE FROM "table" WHERE "pk" IN (?, ?, ?)
+ */
+function buildDeleteByPksParts(
+	tableName: string,
+	pk: string,
+	ids: unknown[],
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const parts: string[] = [
+		`DELETE FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} IN (`,
+	];
+	for (let i = 1; i < ids.length; i++) {
+		parts.push(", ");
+	}
+	parts.push(")");
+
+	return {
+		strings: makeTemplate(parts),
+		values: ids,
+	};
+}
+
+/**
+ * Append RETURNING * to a template.
+ */
+function appendReturning(parts: {
+	strings: TemplateStringsArray;
+	values: unknown[];
+}): {strings: TemplateStringsArray; values: unknown[]} {
+	const strings = [...parts.strings];
+	strings[strings.length - 1] += " RETURNING *";
+	return {
+		strings: makeTemplate(strings),
+		values: parts.values,
+	};
+}
+
+/**
+ * Expand SQLFragment objects within template values.
+ * Returns flattened strings and values arrays.
+ */
+function expandFragments(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const newStrings: string[] = [strings[0]];
+	const newValues: unknown[] = [];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLFragment(value)) {
+			// Expand fragment: merge its SQL into strings, add its params to values
+			const fragment = value as SQLFragment;
+			// Append fragment SQL to last string part
+			newStrings[newStrings.length - 1] += fragment.sql + strings[i + 1];
+			newValues.push(...fragment.params);
+		} else {
+			// Regular value: add placeholder position
+			newStrings.push(strings[i + 1]);
+			newValues.push(value);
+		}
+	}
+
+	return {
+		strings: makeTemplate(newStrings),
+		values: newValues,
+	};
 }
 
 // ============================================================================
@@ -492,12 +790,18 @@ export class Transaction {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(
-				tableArray as Table<any>[],
-				this.#driver.dialect,
+			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
+			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: expandedStrings, values: expandedValues} =
+				expandFragments(strings, values);
+			const prefixedStrings = makeTemplate([
+				prefix + expandedStrings[0],
+				...expandedStrings.slice(1),
+			]);
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				prefixedStrings,
+				[...colParams, ...expandedValues],
 			);
-			const {sql, params} = query(strings, ...values);
-			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
@@ -520,12 +824,9 @@ export class Transaction {
 					new Error(`Table ${table.name} has no primary key defined`),
 				);
 			}
-			const tableName = this.#quoteIdent(table.name);
-			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+			const {strings, values} = buildSelectByPkParts(table.name, pk, id);
 			return this.#driver
-				.get<
-					Record<string, unknown>
-				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
+				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
 					const decoded = decodeData(table, row);
@@ -539,12 +840,18 @@ export class Transaction {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(
-				tableArray as Table<any>[],
-				this.#driver.dialect,
+			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
+			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: expandedStrings, values: expandedValues} =
+				expandFragments(strings, values);
+			const prefixedStrings = makeTemplate([
+				prefix + expandedStrings[0],
+				...expandedStrings.slice(1),
+			]);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				prefixedStrings,
+				[...colParams, ...expandedValues],
 			);
-			const {sql, params} = query(strings, ...values);
-			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
 	}
@@ -554,6 +861,32 @@ export class Transaction {
 	// ==========================================================================
 
 	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T>,
+	): Promise<Infer<T>>;
+	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T>[],
+	): Promise<Infer<T>[]>;
+	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T> | Insert<T>[],
+	): Promise<Infer<T> | Infer<T>[]> {
+		if (Array.isArray(data)) {
+			if (data.length === 0) {
+				return [];
+			}
+			const results: Infer<T>[] = [];
+			for (const row of data) {
+				results.push(await this.#insertOne(table, row));
+			}
+			return results;
+		}
+
+		return this.#insertOne(table, data);
+	}
+
+	async #insertOne<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
@@ -569,20 +902,17 @@ export class Transaction {
 			);
 		}
 
-		// Inject schema-defined expressions (inserted/updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(
 			table,
 			data as Record<string, unknown>,
 			"insert",
 		);
 
-		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
 		const {regularData, expressions} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
-		// Validate and encode only regular data
 		let schema = table.schema;
 		if (Object.keys(expressions).length > 0) {
 			const exprFields = Object.keys(expressions).reduce(
@@ -600,29 +930,14 @@ export class Transaction {
 		);
 		const encoded = encodeData(table, validated);
 
-		// Build SQL with expressions
-		const allColumns = [...Object.keys(encoded), ...Object.keys(expressions)];
-		const tableName = this.#quoteIdent(table.name);
-		const columnList = allColumns.map((c) => this.#quoteIdent(c)).join(", ");
+		const insertParts = buildInsertParts(table.name, encoded, expressions);
 
-		const values: unknown[] = [];
-		const valueParts: string[] = [];
-		let paramIndex = 1;
-
-		for (const col of Object.keys(encoded)) {
-			valueParts.push(this.#placeholder(paramIndex++));
-			values.push(encoded[col]);
-		}
-
-		for (const col of Object.keys(expressions)) {
-			valueParts.push(expressions[col].sql);
-		}
-
-		const valuesClause = valueParts.join(", ");
-
-		if (this.#driver.dialect !== "mysql") {
-			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(insertParts);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
+			);
 			const decoded = decodeData(table, row);
 			return validateWithStandardSchema<Infer<T>>(
 				table.schema,
@@ -630,19 +945,19 @@ export class Transaction {
 			) as Infer<T>;
 		}
 
-		// MySQL fallback
-		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause})`;
-		await this.#driver.run(sql, values);
+		// Fallback: INSERT then SELECT
+		await this.#driver.run(insertParts.strings, insertParts.values);
 
 		const pk = table.meta.primary;
 		const pkValue = pk
 			? (encoded[pk] ?? (expressions[pk] ? undefined : null))
 			: null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
-			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
-				pkValue,
-			]);
+			const {strings, values} = buildSelectByPkParts(table.name, pk, pkValue);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
+			);
 			if (row) {
 				const decoded = decodeData(table, row);
 				return validateWithStandardSchema<Infer<T>>(
@@ -655,10 +970,45 @@ export class Transaction {
 		return validated as Infer<T>;
 	}
 
-	async update<T extends Table<any>>(
+	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
-		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
+		id: string | number,
+	): Promise<Infer<T> | null>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		ids: (string | number)[],
+	): Promise<(Infer<T> | null)[]>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+	): TaggedQuery<Infer<T>[]>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		idOrIds?: string | number | (string | number)[],
+	):
+		| Promise<Infer<T> | null>
+		| Promise<(Infer<T> | null)[]>
+		| TaggedQuery<Infer<T>[]> {
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				return this.#updateWithWhere(table, data, strings, values);
+			};
+		}
+
+		if (Array.isArray(idOrIds)) {
+			return this.#updateByIds(table, data, idOrIds);
+		}
+
+		return this.#updateById(table, data, idOrIds);
+	}
+
+	async #updateById<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		id: string | number,
 	): Promise<Infer<T> | null> {
 		const pk = table.meta.primary;
 		if (!pk) {
@@ -671,20 +1021,17 @@ export class Transaction {
 			);
 		}
 
-		// Inject schema-defined expressions (updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(
 			table,
 			data as Record<string, unknown>,
 			"update",
 		);
 
-		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
 		const {regularData, expressions} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
-		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			partialSchema,
@@ -697,33 +1044,20 @@ export class Transaction {
 		}
 
 		const encoded = encodeData(table, validated);
-		const tableName = this.#quoteIdent(table.name);
+		const updateParts = buildUpdateByIdParts(
+			table.name,
+			pk,
+			encoded,
+			expressions,
+			id,
+		);
 
-		// Build SET clause
-		const values: unknown[] = [];
-		const setParts: string[] = [];
-		let paramIndex = 1;
-
-		for (const col of Object.keys(encoded)) {
-			setParts.push(
-				`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`,
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(updateParts);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
 			);
-			values.push(encoded[col]);
-		}
-
-		for (const col of Object.keys(expressions)) {
-			setParts.push(`${this.#quoteIdent(col)} = ${expressions[col].sql}`);
-		}
-
-		const setClause = setParts.join(", ");
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(paramIndex)}`;
-
-		if (this.#driver.dialect !== "mysql") {
-			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [
-				...values,
-				id,
-			]);
 			if (!row) return null;
 			const decoded = decodeData(table, row);
 			return validateWithStandardSchema<Infer<T>>(
@@ -732,14 +1066,18 @@ export class Transaction {
 			) as Infer<T>;
 		}
 
-		// MySQL fallback
-		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		await this.#driver.run(sql, [...values, id]);
+		// Fallback: UPDATE then SELECT
+		await this.#driver.run(updateParts.strings, updateParts.values);
 
-		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+		const {strings: selectStrings, values: selectValues} = buildSelectByPkParts(
+			table.name,
+			pk,
 			id,
-		]);
+		);
+		const row = await this.#driver.get<Record<string, unknown>>(
+			selectStrings,
+			selectValues,
+		);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
 		return validateWithStandardSchema<Infer<T>>(
@@ -748,33 +1086,309 @@ export class Transaction {
 		) as Infer<T>;
 	}
 
-	async delete<T extends Table<any>>(
-		table: T,
-		id: string | number | Record<string, unknown>,
-	): Promise<boolean> {
+	async #updateByIds<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		ids: (string | number)[],
+	): Promise<(Infer<T> | null)[]> {
+		if (ids.length === 0) {
+			return [];
+		}
+
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		const tableName = this.#quoteIdent(table.name);
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+		if ((table.meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
 
-		const sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id]);
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
 
-		return affected > 0;
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
+
+		const partialSchema = table.schema.partial();
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			regularData,
+		);
+
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
+			throw new Error("No fields to update");
+		}
+
+		const encoded = encodeData(table, validated);
+		const updateParts = buildUpdateByIdsParts(
+			table.name,
+			pk,
+			encoded,
+			expressions,
+			ids,
+		);
+
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(updateParts);
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				strings,
+				values,
+			);
+
+			const resultMap = new Map<string | number, Infer<T>>();
+			for (const row of rows) {
+				const decoded = decodeData(table, row);
+				const entity = validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
+				resultMap.set(row[pk] as string | number, entity);
+			}
+
+			return ids.map((id) => resultMap.get(id) ?? null);
+		}
+
+		// Fallback: UPDATE then SELECT
+		await this.#driver.run(updateParts.strings, updateParts.values);
+
+		const {strings: selectStrings, values: selectValues} =
+			buildSelectByPksParts(table.name, pk, ids);
+		const rows = await this.#driver.all<Record<string, unknown>>(
+			selectStrings,
+			selectValues,
+		);
+
+		const resultMap = new Map<string | number, Infer<T>>();
+		for (const row of rows) {
+			const decoded = decodeData(table, row);
+			const entity = validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
+			resultMap.set(row[pk] as string | number, entity);
+		}
+
+		return ids.map((id) => resultMap.get(id) ?? null);
 	}
 
-	async softDelete<T extends Table<any>>(
-		table: T,
-		id: string | number | Record<string, unknown>,
-	): Promise<boolean> {
+	async #updateWithWhere<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		strings: TemplateStringsArray,
+		templateValues: unknown[],
+	): Promise<Infer<T>[]> {
+		if ((table.meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
+
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
+
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
+
+		const partialSchema = table.schema.partial();
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			regularData,
+		);
+
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
+			throw new Error("No fields to update");
+		}
+
+		const encoded = encodeData(table, validated);
+
+		// Build SET clause
+		const setCols = Object.keys(encoded);
+		const exprCols = Object.keys(expressions);
+		const setClauseParts: string[] = [];
+		for (const col of setCols) {
+			setClauseParts.push(`${quoteIdent(col)} = `);
+		}
+		const exprAssignments = exprCols
+			.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
+			.join(", ");
+
+		// Build complete UPDATE template
+		const {strings: whereStrings, values: whereValues} = expandFragments(
+			strings,
+			templateValues,
+		);
+		const setValues = setCols.map((c) => encoded[c]);
+
+		// Construct: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE ...
+		const prefix = `UPDATE ${quoteIdent(table.name)} SET `;
+		const parts: string[] = [prefix];
+		for (let i = 0; i < setCols.length; i++) {
+			if (i === 0) {
+				parts[0] += `${quoteIdent(setCols[i])} = `;
+			} else {
+				parts.push(`, ${quoteIdent(setCols[i])} = `);
+			}
+		}
+		if (setCols.length > 0 && exprCols.length > 0) {
+			parts.push(`, ${exprAssignments} ${whereStrings[0]}`);
+		} else if (exprCols.length > 0) {
+			parts[0] += `${exprAssignments} ${whereStrings[0]}`;
+		} else {
+			parts.push(` ${whereStrings[0]}`);
+		}
+		// Add rest of WHERE template parts
+		for (let i = 1; i < whereStrings.length; i++) {
+			parts.push(whereStrings[i]);
+		}
+
+		const allValues = [...setValues, ...whereValues];
+
+		if (this.#driver.supportsReturning) {
+			parts[parts.length - 1] += " RETURNING *";
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				makeTemplate(parts),
+				allValues,
+			);
+			return rows.map((row) => {
+				const decoded = decodeData(table, row);
+				return validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
+			});
+		}
+
+		// Fallback: Get IDs first, then UPDATE, then SELECT
+		// Build SELECT to get IDs first
+		const selectIdParts = [
+			`SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)} ${whereStrings[0]}`,
+			...whereStrings.slice(1),
+		];
+		const idRows = await this.#driver.all<Record<string, unknown>>(
+			makeTemplate(selectIdParts),
+			whereValues,
+		);
+		const ids = idRows.map((r) => r[pk] as string | number);
+
+		if (ids.length === 0) {
+			return [];
+		}
+
+		// Run UPDATE
+		await this.#driver.run(makeTemplate(parts), allValues);
+
+		// SELECT by IDs
+		const {strings: selectStrings, values: selectVals} = buildSelectByPksParts(
+			table.name,
+			pk,
+			ids,
+		);
+		const rows = await this.#driver.all<Record<string, unknown>>(
+			selectStrings,
+			selectVals,
+		);
+
+		return rows.map((row) => {
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
+		});
+	}
+
+	delete<T extends Table<any>>(table: T, id: string | number): Promise<number>;
+	delete<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number>;
+	delete<T extends Table<any>>(table: T): TaggedQuery<number>;
+	delete<T extends Table<any>>(
+		table: T,
+		idOrIds?: string | number | (string | number)[],
+	): Promise<number> | TaggedQuery<number> {
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				const {strings: expandedStrings, values: expandedValues} =
+					expandFragments(strings, values);
+				const prefixedStrings = makeTemplate([
+					`DELETE FROM ${quoteIdent(table.name)} ${expandedStrings[0]}`,
+					...expandedStrings.slice(1),
+				]);
+				return this.#driver.run(prefixedStrings, expandedValues);
+			};
+		}
+
+		if (Array.isArray(idOrIds)) {
+			return this.#deleteByIds(table, idOrIds);
+		}
+
+		return this.#deleteById(table, idOrIds);
+	}
+
+	async #deleteById<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number> {
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const {strings, values} = buildDeleteByPkParts(table.name, pk, id);
+		return this.#driver.run(strings, values);
+	}
+
+	async #deleteByIds<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number> {
+		if (ids.length === 0) {
+			return 0;
+		}
+
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const {strings, values} = buildDeleteByPksParts(table.name, pk, ids);
+		return this.#driver.run(strings, values);
+	}
+
+	softDelete<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number>;
+	softDelete<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number>;
+	softDelete<T extends Table<any>>(table: T): TaggedQuery<number>;
+	softDelete<T extends Table<any>>(
+		table: T,
+		idOrIds?: string | number | (string | number)[],
+	): Promise<number> | TaggedQuery<number> {
 		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
@@ -782,29 +1396,117 @@ export class Transaction {
 			);
 		}
 
-		// Inject updated() markers (soft delete is an update operation)
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				return this.#softDeleteWithWhere(table, strings, values);
+			};
+		}
+
+		if (Array.isArray(idOrIds)) {
+			return this.#softDeleteByIds(table, idOrIds);
+		}
+
+		return this.#softDeleteById(table, idOrIds);
+	}
+
+	async #softDeleteById<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number> {
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table.meta.softDeleteField!;
+
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions} = extractDBExpressions(schemaExprs);
 
-		// Build SET clause: softDelete field + any updated() expressions
 		const setClauses: string[] = [
-			`${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
 		];
 		for (const [field, expr] of Object.entries(expressions)) {
-			// Don't double-set the softDelete field if it has an updated() marker
 			if (field !== softDeleteField) {
-				setClauses.push(`${this.#quoteIdent(field)} = ${expr.sql}`);
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
 			}
 		}
 
-		const tableName = this.#quoteIdent(table.name);
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
 		const setClause = setClauses.join(", ");
+		const sql = `UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} = `;
+		const parts = makeTemplate([sql, ""]);
+		return this.#driver.run(parts, [id]);
+	}
 
-		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id]);
+	async #softDeleteByIds<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number> {
+		if (ids.length === 0) {
+			return 0;
+		}
 
-		return affected > 0;
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table.meta.softDeleteField!;
+
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		const setClauses: string[] = [
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
+		const setClause = setClauses.join(", ");
+		const parts: string[] = [
+			`UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} IN (`,
+		];
+		for (let i = 1; i < ids.length; i++) {
+			parts.push(", ");
+		}
+		parts.push(")");
+
+		return this.#driver.run(makeTemplate(parts), ids);
+	}
+
+	async #softDeleteWithWhere<T extends Table<any>>(
+		table: T,
+		strings: TemplateStringsArray,
+		templateValues: unknown[],
+	): Promise<number> {
+		const softDeleteField = table.meta.softDeleteField!;
+
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		const setClauses: string[] = [
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
+		const setClause = setClauses.join(", ");
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			templateValues,
+		);
+		const prefixedStrings = makeTemplate([
+			`UPDATE ${quoteIdent(table.name)} SET ${setClause} ${expandedStrings[0]}`,
+			...expandedStrings.slice(1),
+		]);
+
+		return this.#driver.run(prefixedStrings, expandedValues);
 	}
 
 	// ==========================================================================
@@ -815,24 +1517,33 @@ export class Transaction {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T[]> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.all<T>(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.all<T>(expandedStrings, expandedValues);
 	}
 
 	async exec(
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<number> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.run(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.run(expandedStrings, expandedValues);
 	}
 
 	async val<T>(
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T | null> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.val<T>(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.val<T>(expandedStrings, expandedValues);
 	}
 
 	// ==========================================================================
@@ -842,48 +1553,22 @@ export class Transaction {
 	/**
 	 * Print the generated SQL and parameters without executing.
 	 * Useful for debugging query composition and fragment expansion.
+	 * Note: SQL shown uses ? placeholders; actual query may use $1, $2 etc.
 	 */
 	print(
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): {sql: string; params: unknown[]} {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return {sql, params};
-	}
-
-	/**
-	 * Run EXPLAIN on a query to see the database's query plan.
-	 * Helps optimize queries by showing index usage, join order, etc.
-	 *
-	 * @throws Error if driver doesn't implement explain()
-	 */
-	async explain(
-		strings: TemplateStringsArray,
-		...values: unknown[]
-	): Promise<Record<string, unknown>[]> {
-		if (!this.#driver.explain) {
-			throw new Error(
-				`Driver ${this.#driver.dialect} does not support EXPLAIN`,
-			);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		// Join with ? placeholders for display
+		let sql = expandedStrings[0];
+		for (let i = 1; i < expandedStrings.length; i++) {
+			sql += "?" + expandedStrings[i];
 		}
-
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.explain(sql, params);
-	}
-
-	// ==========================================================================
-	// Helpers
-	// ==========================================================================
-
-	#quoteIdent(name: string): string {
-		return this.#driver.escapeIdentifier(name);
-	}
-
-	#placeholder(index: number): string {
-		if (this.#driver.dialect === "postgresql") {
-			return `$${index}`;
-		}
-		return "?";
+		return {sql, params: expandedValues};
 	}
 }
 
@@ -963,29 +1648,12 @@ export class Database extends EventTarget {
 			}
 		};
 
-		// Use driver's migration lock if available, otherwise fall back to SQL-based locking
+		// Use driver's migration lock if available, otherwise use transaction
 		if (this.#driver.withMigrationLock) {
 			await this.#driver.withMigrationLock(runMigration);
 		} else {
-			// Fallback: SQL-based transaction locking
-			// SQLite: BEGIN IMMEDIATE acquires write lock upfront
-			// PostgreSQL/MySQL: relies on SELECT FOR UPDATE in #getCurrentVersionLocked
-			const beginSQL =
-				this.#driver.dialect === "sqlite"
-					? "BEGIN IMMEDIATE"
-					: this.#driver.dialect === "mysql"
-						? "START TRANSACTION"
-						: "BEGIN";
-
-			await this.#driver.run(beginSQL, []);
-
-			try {
-				await runMigration();
-				await this.#driver.run("COMMIT", []);
-			} catch (error) {
-				await this.#driver.run("ROLLBACK", []);
-				throw error;
-			}
+			// Fallback: Use driver's transaction for locking
+			await this.#driver.transaction(runMigration);
 		}
 
 		this.#version = version;
@@ -997,35 +1665,31 @@ export class Database extends EventTarget {
 	// ==========================================================================
 
 	async #ensureMigrationsTable(): Promise<void> {
-		const timestampCol =
-			this.#driver.dialect === "mysql"
-				? "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-				: "applied_at TEXT DEFAULT CURRENT_TIMESTAMP";
-
-		await this.#driver.run(
+		// Use TEXT for timestamp - works across all databases
+		const createTable = makeTemplate([
 			`CREATE TABLE IF NOT EXISTS _migrations (
 				version INTEGER PRIMARY KEY,
-				${timestampCol}
+				applied_at TEXT DEFAULT CURRENT_TIMESTAMP
 			)`,
-			[],
-		);
+		]);
+		await this.#driver.run(createTable, []);
 	}
 
 	async #getCurrentVersionLocked(): Promise<number> {
-		// Locking is handled by withMigrationLock() (advisory locks) or
-		// the transaction wrapper (BEGIN IMMEDIATE for SQLite, or transaction for others)
-		const row = await this.#driver.get<{version: number}>(
+		// Locking is handled by withMigrationLock() or transaction wrapper
+		const selectVersion = makeTemplate([
 			`SELECT MAX(version) as version FROM _migrations`,
-			[],
-		);
+		]);
+		const row = await this.#driver.get<{version: number}>(selectVersion, []);
 		return row?.version ?? 0;
 	}
 
 	async #setVersion(version: number): Promise<void> {
-		await this.#driver.run(
-			`INSERT INTO _migrations (version) VALUES (${this.#placeholder(1)})`,
-			[version],
-		);
+		const insertVersion = makeTemplate([
+			`INSERT INTO _migrations (version) VALUES (`,
+			`)`,
+		]);
+		await this.#driver.run(insertVersion, [version]);
 	}
 
 	// ==========================================================================
@@ -1049,12 +1713,18 @@ export class Database extends EventTarget {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(
-				tableArray as Table<any>[],
-				this.#driver.dialect,
+			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
+			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: expandedStrings, values: expandedValues} =
+				expandFragments(strings, values);
+			const prefixedStrings = makeTemplate([
+				prefix + expandedStrings[0],
+				...expandedStrings.slice(1),
+			]);
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				prefixedStrings,
+				[...colParams, ...expandedValues],
 			);
-			const {sql, params} = query(strings, ...values);
-			const rows = await this.#driver.all<Record<string, unknown>>(sql, params);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
@@ -1093,12 +1763,9 @@ export class Database extends EventTarget {
 					new Error(`Table ${table.name} has no primary key defined`),
 				);
 			}
-			const tableName = this.#quoteIdent(table.name);
-			const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+			const {strings, values} = buildSelectByPkParts(table.name, pk, id);
 			return this.#driver
-				.get<
-					Record<string, unknown>
-				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
+				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
 					const decoded = decodeData(table, row);
@@ -1112,12 +1779,18 @@ export class Database extends EventTarget {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const query = createQuery(
-				tableArray as Table<any>[],
-				this.#driver.dialect,
+			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
+			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: expandedStrings, values: expandedValues} =
+				expandFragments(strings, values);
+			const prefixedStrings = makeTemplate([
+				prefix + expandedStrings[0],
+				...expandedStrings.slice(1),
+			]);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				prefixedStrings,
+				[...colParams, ...expandedValues],
 			);
-			const {sql, params} = query(strings, ...values);
-			const row = await this.#driver.get<Record<string, unknown>>(sql, params);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
 	}
@@ -1127,18 +1800,53 @@ export class Database extends EventTarget {
 	// ==========================================================================
 
 	/**
-	 * Insert a new entity.
+	 * Insert one or more entities.
 	 *
-	 * Uses RETURNING to get the actual inserted row (with DB defaults).
+	 * Uses RETURNING to get the actual inserted row(s) (with DB defaults).
 	 *
 	 * @example
-	 * const user = await db.insert(users, {
+	 * // Single insert
+	 * const user = await db.insert(Users, {
 	 *   id: crypto.randomUUID(),
 	 *   email: "alice@example.com",
 	 *   name: "Alice",
 	 * });
+	 *
+	 * // Bulk insert
+	 * const users = await db.insert(Users, [
+	 *   { id: "1", email: "alice@example.com", name: "Alice" },
+	 *   { id: "2", email: "bob@example.com", name: "Bob" },
+	 * ]);
 	 */
 	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T>,
+	): Promise<Infer<T>>;
+	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T>[],
+	): Promise<Infer<T>[]>;
+	async insert<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Insert<T> | Insert<T>[],
+	): Promise<Infer<T> | Infer<T>[]> {
+		// Handle array insert
+		if (Array.isArray(data)) {
+			if (data.length === 0) {
+				return [];
+			}
+			// Insert each row and collect results
+			const results: Infer<T>[] = [];
+			for (const row of data) {
+				results.push(await this.#insertOne(table, row));
+			}
+			return results;
+		}
+
+		return this.#insertOne(table, data);
+	}
+
+	async #insertOne<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
@@ -1154,24 +1862,19 @@ export class Database extends EventTarget {
 			);
 		}
 
-		// Inject schema-defined expressions (inserted/updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(
 			table,
 			data as Record<string, unknown>,
 			"insert",
 		);
 
-		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
 		const {regularData, expressions} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
-		// Validate and encode only regular data
-		// DB expression fields are excluded from validation since they're handled by the DB
 		let schema = table.schema;
 		if (Object.keys(expressions).length > 0) {
-			// Make expression fields optional for validation
 			const exprFields = Object.keys(expressions).reduce(
 				(acc, key) => {
 					acc[key] = (table.schema.shape as any)[key].optional();
@@ -1187,32 +1890,14 @@ export class Database extends EventTarget {
 		);
 		const encoded = encodeData(table, validated);
 
-		// Merge encoded regular data with expressions for column list
-		const allColumns = [...Object.keys(encoded), ...Object.keys(expressions)];
-		const tableName = this.#quoteIdent(table.name);
-		const columnList = allColumns.map((c) => this.#quoteIdent(c)).join(", ");
+		const insertParts = buildInsertParts(table.name, encoded, expressions);
 
-		// Build values list: placeholders for regular values, raw SQL for expressions
-		const values: unknown[] = [];
-		const valueParts: string[] = [];
-		let paramIndex = 1;
-
-		for (const col of Object.keys(encoded)) {
-			valueParts.push(this.#placeholder(paramIndex++));
-			values.push(encoded[col]);
-		}
-
-		for (const col of Object.keys(expressions)) {
-			const expr = expressions[col];
-			valueParts.push(expr.sql);
-		}
-
-		const valuesClause = valueParts.join(", ");
-
-		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
-		if (this.#driver.dialect !== "mysql") {
-			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(insertParts);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
+			);
 			const decoded = decodeData(table, row);
 			return validateWithStandardSchema<Infer<T>>(
 				table.schema,
@@ -1220,20 +1905,19 @@ export class Database extends EventTarget {
 			) as Infer<T>;
 		}
 
-		// MySQL fallback: INSERT then SELECT to get DB defaults
-		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause})`;
-		await this.#driver.run(sql, values);
+		// Fallback: INSERT then SELECT
+		await this.#driver.run(insertParts.strings, insertParts.values);
 
-		// Fetch the inserted row to get DB-applied defaults
 		const pk = table.meta.primary;
 		const pkValue = pk
 			? (encoded[pk] ?? (expressions[pk] ? undefined : null))
 			: null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
-			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
-				pkValue,
-			]);
+			const {strings, values} = buildSelectByPkParts(table.name, pk, pkValue);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
+			);
 			if (row) {
 				const decoded = decodeData(table, row);
 				return validateWithStandardSchema<Infer<T>>(
@@ -1243,22 +1927,64 @@ export class Database extends EventTarget {
 			}
 		}
 
-		// Fallback if no primary key or row not found (shouldn't happen normally)
 		return validated as Infer<T>;
 	}
 
 	/**
-	 * Update an entity by primary key.
-	 *
-	 * Uses RETURNING to get the updated row in a single query.
+	 * Update entities.
 	 *
 	 * @example
-	 * const user = await db.update(users, userId, { name: "Bob" });
+	 * // Update by primary key
+	 * const user = await db.update(Users, { name: "Bob" }, userId);
+	 *
+	 * // Update multiple by primary keys
+	 * const users = await db.update(Users, { active: true }, [id1, id2, id3]);
+	 *
+	 * // Update with custom WHERE clause
+	 * const count = await db.update(Users, { active: false })`WHERE lastLogin < ${cutoff}`;
 	 */
-	async update<T extends Table<any>>(
+	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
-		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
+		id: string | number,
+	): Promise<Infer<T> | null>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		ids: (string | number)[],
+	): Promise<(Infer<T> | null)[]>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+	): TaggedQuery<Infer<T>[]>;
+	update<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		idOrIds?: string | number | (string | number)[],
+	):
+		| Promise<Infer<T> | null>
+		| Promise<(Infer<T> | null)[]>
+		| TaggedQuery<Infer<T>[]> {
+		// Template overload - update with custom WHERE
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				return this.#updateWithWhere(table, data, strings, values);
+			};
+		}
+
+		// Array of IDs
+		if (Array.isArray(idOrIds)) {
+			return this.#updateByIds(table, data, idOrIds);
+		}
+
+		// Single ID
+		return this.#updateById(table, data, idOrIds);
+	}
+
+	async #updateById<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		id: string | number,
 	): Promise<Infer<T> | null> {
 		const pk = table.meta.primary;
 		if (!pk) {
@@ -1271,20 +1997,17 @@ export class Database extends EventTarget {
 			);
 		}
 
-		// Inject schema-defined expressions (updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(
 			table,
 			data as Record<string, unknown>,
 			"update",
 		);
 
-		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
 		const {regularData, expressions} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
-		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			partialSchema,
@@ -1297,35 +2020,20 @@ export class Database extends EventTarget {
 		}
 
 		const encoded = encodeData(table, validated);
-		const tableName = this.#quoteIdent(table.name);
+		const updateParts = buildUpdateByIdParts(
+			table.name,
+			pk,
+			encoded,
+			expressions,
+			id,
+		);
 
-		// Build SET clause: mix of placeholders and raw SQL
-		const values: unknown[] = [];
-		const setParts: string[] = [];
-		let paramIndex = 1;
-
-		for (const col of Object.keys(encoded)) {
-			setParts.push(
-				`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`,
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(updateParts);
+			const row = await this.#driver.get<Record<string, unknown>>(
+				strings,
+				values,
 			);
-			values.push(encoded[col]);
-		}
-
-		for (const col of Object.keys(expressions)) {
-			const expr = expressions[col];
-			setParts.push(`${this.#quoteIdent(col)} = ${expr.sql}`);
-		}
-
-		const setClause = setParts.join(", ");
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(paramIndex)}`;
-
-		// Use RETURNING for SQLite/PostgreSQL
-		if (this.#driver.dialect !== "mysql") {
-			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [
-				...values,
-				id,
-			]);
 			if (!row) return null;
 			const decoded = decodeData(table, row);
 			return validateWithStandardSchema<Infer<T>>(
@@ -1334,14 +2042,18 @@ export class Database extends EventTarget {
 			) as Infer<T>;
 		}
 
-		// MySQL fallback: UPDATE then SELECT
-		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		await this.#driver.run(sql, [...values, id]);
+		// Fallback: UPDATE then SELECT
+		await this.#driver.run(updateParts.strings, updateParts.values);
 
-		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+		const {strings: selectStrings, values: selectValues} = buildSelectByPkParts(
+			table.name,
+			pk,
 			id,
-		]);
+		);
+		const row = await this.#driver.get<Record<string, unknown>>(
+			selectStrings,
+			selectValues,
+		);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
 		return validateWithStandardSchema<Infer<T>>(
@@ -1350,45 +2062,330 @@ export class Database extends EventTarget {
 		) as Infer<T>;
 	}
 
-	/**
-	 * Delete an entity by primary key.
-	 *
-	 * @example
-	 * const deleted = await db.delete(users, userId);
-	 */
-	async delete<T extends Table<any>>(
-		table: T,
-		id: string | number | Record<string, unknown>,
-	): Promise<boolean> {
+	async #updateByIds<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		ids: (string | number)[],
+	): Promise<(Infer<T> | null)[]> {
+		if (ids.length === 0) {
+			return [];
+		}
+
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		const tableName = this.#quoteIdent(table.name);
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
+		if ((table.meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
 
-		const sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id]);
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
 
-		return affected > 0;
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
+
+		const partialSchema = table.schema.partial();
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			regularData,
+		);
+
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
+			throw new Error("No fields to update");
+		}
+
+		const encoded = encodeData(table, validated);
+		const updateParts = buildUpdateByIdsParts(
+			table.name,
+			pk,
+			encoded,
+			expressions,
+			ids,
+		);
+
+		if (this.#driver.supportsReturning) {
+			const {strings, values} = appendReturning(updateParts);
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				strings,
+				values,
+			);
+
+			const resultMap = new Map<string | number, Infer<T>>();
+			for (const row of rows) {
+				const decoded = decodeData(table, row);
+				const entity = validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
+				resultMap.set(row[pk] as string | number, entity);
+			}
+
+			return ids.map((id) => resultMap.get(id) ?? null);
+		}
+
+		// Fallback: UPDATE then SELECT
+		await this.#driver.run(updateParts.strings, updateParts.values);
+
+		const {strings: selectStrings, values: selectValues} =
+			buildSelectByPksParts(table.name, pk, ids);
+		const rows = await this.#driver.all<Record<string, unknown>>(
+			selectStrings,
+			selectValues,
+		);
+
+		const resultMap = new Map<string | number, Infer<T>>();
+		for (const row of rows) {
+			const decoded = decodeData(table, row);
+			const entity = validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
+			resultMap.set(row[pk] as string | number, entity);
+		}
+
+		return ids.map((id) => resultMap.get(id) ?? null);
+	}
+
+	async #updateWithWhere<T extends Table<any>>(
+		table: T & FullTableOnly<T>,
+		data: Partial<Insert<T>>,
+		strings: TemplateStringsArray,
+		templateValues: unknown[],
+	): Promise<Infer<T>[]> {
+		if ((table.meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
+
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
+
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
+
+		const partialSchema = table.schema.partial();
+		const validated = validateWithStandardSchema<Record<string, unknown>>(
+			partialSchema,
+			regularData,
+		);
+
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
+			throw new Error("No fields to update");
+		}
+
+		const encoded = encodeData(table, validated);
+
+		// Build SET clause
+		const setCols = Object.keys(encoded);
+		const exprCols = Object.keys(expressions);
+		const exprAssignments = exprCols
+			.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
+			.join(", ");
+
+		// Build complete UPDATE template
+		const {strings: whereStrings, values: whereValues} = expandFragments(
+			strings,
+			templateValues,
+		);
+		const setValues = setCols.map((c) => encoded[c]);
+
+		// Construct: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE ...
+		const prefix = `UPDATE ${quoteIdent(table.name)} SET `;
+		const parts: string[] = [prefix];
+		for (let i = 0; i < setCols.length; i++) {
+			if (i === 0) {
+				parts[0] += `${quoteIdent(setCols[i])} = `;
+			} else {
+				parts.push(`, ${quoteIdent(setCols[i])} = `);
+			}
+		}
+		if (setCols.length > 0 && exprCols.length > 0) {
+			parts.push(`, ${exprAssignments} ${whereStrings[0]}`);
+		} else if (exprCols.length > 0) {
+			parts[0] += `${exprAssignments} ${whereStrings[0]}`;
+		} else {
+			parts.push(` ${whereStrings[0]}`);
+		}
+		// Add rest of WHERE template parts
+		for (let i = 1; i < whereStrings.length; i++) {
+			parts.push(whereStrings[i]);
+		}
+
+		const allValues = [...setValues, ...whereValues];
+
+		if (this.#driver.supportsReturning) {
+			parts[parts.length - 1] += " RETURNING *";
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				makeTemplate(parts),
+				allValues,
+			);
+			return rows.map((row) => {
+				const decoded = decodeData(table, row);
+				return validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
+			});
+		}
+
+		// Fallback: Get IDs first, then UPDATE, then SELECT
+		const selectIdParts = [
+			`SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)} ${whereStrings[0]}`,
+			...whereStrings.slice(1),
+		];
+		const idRows = await this.#driver.all<Record<string, unknown>>(
+			makeTemplate(selectIdParts),
+			whereValues,
+		);
+		const ids = idRows.map((r) => r[pk] as string | number);
+
+		if (ids.length === 0) {
+			return [];
+		}
+
+		// Run UPDATE
+		await this.#driver.run(makeTemplate(parts), allValues);
+
+		// SELECT by IDs
+		const {strings: selectStrings, values: selectVals} = buildSelectByPksParts(
+			table.name,
+			pk,
+			ids,
+		);
+		const rows = await this.#driver.all<Record<string, unknown>>(
+			selectStrings,
+			selectVals,
+		);
+
+		return rows.map((row) => {
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
+		});
 	}
 
 	/**
-	 * Soft delete by marking the soft delete field (e.g., deletedAt) with the current timestamp.
+	 * Delete entities.
 	 *
 	 * @example
-	 * const deleted = await tx.softDelete(Users, userId);
+	 * // Delete by primary key (returns 0 or 1)
+	 * const count = await db.delete(Users, userId);
+	 *
+	 * // Delete multiple by primary keys
+	 * const count = await db.delete(Users, [id1, id2, id3]);
+	 *
+	 * // Delete with custom WHERE clause
+	 * const count = await db.delete(Users)`WHERE inactive = ${true}`;
 	 */
-	async softDelete<T extends Table<any>>(
+	delete<T extends Table<any>>(table: T, id: string | number): Promise<number>;
+	delete<T extends Table<any>>(
 		table: T,
-		id: string | number | Record<string, unknown>,
-	): Promise<boolean> {
+		ids: (string | number)[],
+	): Promise<number>;
+	delete<T extends Table<any>>(table: T): TaggedQuery<number>;
+	delete<T extends Table<any>>(
+		table: T,
+		idOrIds?: string | number | (string | number)[],
+	): Promise<number> | TaggedQuery<number> {
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				const {strings: expandedStrings, values: expandedValues} =
+					expandFragments(strings, values);
+				const prefixedStrings = makeTemplate([
+					`DELETE FROM ${quoteIdent(table.name)} ${expandedStrings[0]}`,
+					...expandedStrings.slice(1),
+				]);
+				return this.#driver.run(prefixedStrings, expandedValues);
+			};
+		}
+
+		if (Array.isArray(idOrIds)) {
+			return this.#deleteByIds(table, idOrIds);
+		}
+
+		return this.#deleteById(table, idOrIds);
+	}
+
+	async #deleteById<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number> {
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
+		const {strings, values} = buildDeleteByPkParts(table.name, pk, id);
+		return this.#driver.run(strings, values);
+	}
+
+	async #deleteByIds<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number> {
+		if (ids.length === 0) {
+			return 0;
+		}
+
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const {strings, values} = buildDeleteByPksParts(table.name, pk, ids);
+		return this.#driver.run(strings, values);
+	}
+
+	/**
+	 * Soft delete entities by marking the soft delete field with the current timestamp.
+	 *
+	 * @example
+	 * // Soft delete by primary key (returns 0 or 1)
+	 * const count = await db.softDelete(Users, userId);
+	 *
+	 * // Soft delete multiple by primary keys
+	 * const count = await db.softDelete(Users, [id1, id2, id3]);
+	 *
+	 * // Soft delete with custom WHERE clause
+	 * const count = await db.softDelete(Users)`WHERE inactive = ${true}`;
+	 */
+	softDelete<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number>;
+	softDelete<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number>;
+	softDelete<T extends Table<any>>(table: T): TaggedQuery<number>;
+	softDelete<T extends Table<any>>(
+		table: T,
+		idOrIds?: string | number | (string | number)[],
+	): Promise<number> | TaggedQuery<number> {
 		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
@@ -1396,29 +2393,120 @@ export class Database extends EventTarget {
 			);
 		}
 
-		// Inject updated() markers (soft delete is an update operation)
+		// Template overload - soft delete with custom WHERE
+		if (idOrIds === undefined) {
+			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+				return this.#softDeleteWithWhere(table, strings, values);
+			};
+		}
+
+		// Array of IDs
+		if (Array.isArray(idOrIds)) {
+			return this.#softDeleteByIds(table, idOrIds);
+		}
+
+		// Single ID
+		return this.#softDeleteById(table, idOrIds);
+	}
+
+	async #softDeleteById<T extends Table<any>>(
+		table: T,
+		id: string | number,
+	): Promise<number> {
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table.meta.softDeleteField!;
+
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions} = extractDBExpressions(schemaExprs);
 
-		// Build SET clause: softDelete field + any updated() expressions
 		const setClauses: string[] = [
-			`${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
 		];
 		for (const [field, expr] of Object.entries(expressions)) {
-			// Don't double-set the softDelete field if it has an updated() marker
 			if (field !== softDeleteField) {
-				setClauses.push(`${this.#quoteIdent(field)} = ${expr.sql}`);
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
 			}
 		}
 
-		const tableName = this.#quoteIdent(table.name);
-		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
 		const setClause = setClauses.join(", ");
+		const sql = `UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} = `;
+		const parts = makeTemplate([sql, ""]);
+		return this.#driver.run(parts, [id]);
+	}
 
-		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id]);
+	async #softDeleteByIds<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<number> {
+		if (ids.length === 0) {
+			return 0;
+		}
 
-		return affected > 0;
+		const pk = table.meta.primary;
+		if (!pk) {
+			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		const softDeleteField = table.meta.softDeleteField!;
+
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		const setClauses: string[] = [
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
+		const setClause = setClauses.join(", ");
+		const parts: string[] = [
+			`UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} IN (`,
+		];
+		for (let i = 1; i < ids.length; i++) {
+			parts.push(", ");
+		}
+		parts.push(")");
+
+		return this.#driver.run(makeTemplate(parts), ids);
+	}
+
+	async #softDeleteWithWhere<T extends Table<any>>(
+		table: T,
+		strings: TemplateStringsArray,
+		templateValues: unknown[],
+	): Promise<number> {
+		const softDeleteField = table.meta.softDeleteField!;
+
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		const setClauses: string[] = [
+			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
+		const setClause = setClauses.join(", ");
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			templateValues,
+		);
+		const prefixedStrings = makeTemplate([
+			`UPDATE ${quoteIdent(table.name)} SET ${setClause} ${expandedStrings[0]}`,
+			...expandedStrings.slice(1),
+		]);
+
+		return this.#driver.run(prefixedStrings, expandedValues);
 	}
 
 	// ==========================================================================
@@ -1437,8 +2525,11 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T[]> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.all<T>(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.all<T>(expandedStrings, expandedValues);
 	}
 
 	/**
@@ -1451,8 +2542,11 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<number> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.run(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.run(expandedStrings, expandedValues);
 	}
 
 	/**
@@ -1465,8 +2559,11 @@ export class Database extends EventTarget {
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): Promise<T | null> {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.val<T>(sql, params);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return this.#driver.val<T>(expandedStrings, expandedValues);
 	}
 
 	// ==========================================================================
@@ -1476,62 +2573,22 @@ export class Database extends EventTarget {
 	/**
 	 * Print the generated SQL and parameters without executing.
 	 * Useful for debugging query composition and fragment expansion.
-	 *
-	 * @returns Object with sql string and params array
-	 *
-	 * @example
-	 * const query = db.print`
-	 *   SELECT * FROM ${Posts}
-	 *   WHERE ${Posts.where({ published: true })}
-	 * `;
-	 * console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = $1
-	 * console.log(query.params);  // [true]
-	 *
-	 * @example
-	 * // Inspect DDL generation
-	 * const ddl = db.print`${Posts.ddl()}`;
-	 * console.log(ddl.sql);  // CREATE TABLE IF NOT EXISTS "posts" (...)
+	 * Note: SQL shown uses ? placeholders; actual query may use $1, $2 etc.
 	 */
 	print(
 		strings: TemplateStringsArray,
 		...values: unknown[]
 	): {sql: string; params: unknown[]} {
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return {sql, params};
-	}
-
-	/**
-	 * Run EXPLAIN on a query to see the database's query plan.
-	 * Helps optimize queries by showing index usage, join order, etc.
-	 *
-	 * **Dialect differences**:
-	 * - SQLite: Uses `EXPLAIN QUERY PLAN`
-	 * - PostgreSQL/MySQL: Uses `EXPLAIN`
-	 *
-	 * @returns Array of query plan rows (structure varies by database)
-	 * @throws Error if driver doesn't implement explain()
-	 *
-	 * @example
-	 * const plan = await db.explain`
-	 *   SELECT * FROM ${Posts}
-	 *   WHERE ${Posts.where({ authorId: userId })}
-	 * `;
-	 * console.log(plan);
-	 * // SQLite: [{ detail: "SEARCH posts USING INDEX idx_posts_authorId (authorId=?)" }]
-	 * // PostgreSQL: [{ "QUERY PLAN": "Index Scan using idx_posts_authorId on posts" }]
-	 */
-	async explain(
-		strings: TemplateStringsArray,
-		...values: unknown[]
-	): Promise<Record<string, unknown>[]> {
-		if (!this.#driver.explain) {
-			throw new Error(
-				`Driver ${this.#driver.dialect} does not support EXPLAIN`,
-			);
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		// Join with ? placeholders for display
+		let sql = expandedStrings[0];
+		for (let i = 1; i < expandedStrings.length; i++) {
+			sql += "?" + expandedStrings[i];
 		}
-
-		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
-		return this.#driver.explain(sql, params);
+		return {sql, params: expandedValues};
 	}
 
 	// ==========================================================================
@@ -1555,26 +2612,9 @@ export class Database extends EventTarget {
 	 * });
 	 */
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-		// Delegate to driver.transaction() which provides a transaction-bound driver
 		return await this.#driver.transaction(async (txDriver) => {
-			// Create Transaction using the transaction-bound driver, not the main driver
 			const tx = new Transaction(txDriver);
 			return await fn(tx);
 		});
-	}
-
-	// ==========================================================================
-	// Helpers
-	// ==========================================================================
-
-	#quoteIdent(name: string): string {
-		return this.#driver.escapeIdentifier(name);
-	}
-
-	#placeholder(index: number): string {
-		if (this.#driver.dialect === "postgresql") {
-			return `$${index}`;
-		}
-		return "?";
 	}
 }

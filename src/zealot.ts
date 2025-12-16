@@ -34,9 +34,6 @@ export {
 	type FullTableOnly,
 
 	// Fragment method types
-	type ConditionOperators,
-	type ConditionValue,
-	type WhereConditions,
 	type SetValues,
 } from "./impl/table.js";
 

@@ -12,6 +12,17 @@ import {ConstraintViolationError} from "./zealot.js";
 import Database from "better-sqlite3";
 
 /**
+ * Build SQL from template parts using ? placeholders.
+ */
+function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
+	let sql = strings[0];
+	for (let i = 1; i < strings.length; i++) {
+		sql += "?" + strings[i];
+	}
+	return sql;
+}
+
+/**
  * SQLite driver using better-sqlite3.
  *
  * @example
@@ -31,7 +42,7 @@ import Database from "better-sqlite3";
  * await driver.close();
  */
 export default class SQLiteDriver implements Driver {
-	readonly dialect = "sqlite" as const;
+	readonly supportsReturning = true;
 	#db: Database.Database;
 
 	constructor(url: string) {
@@ -86,45 +97,50 @@ export default class SQLiteDriver implements Driver {
 		throw error;
 	}
 
-	async all<T>(sql: string, params: unknown[]): Promise<T[]> {
+	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			return this.#db.prepare(sql).all(...params) as T[];
+			const sql = buildSQL(strings, values);
+			return this.#db.prepare(sql).all(...values) as T[];
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async get<T>(sql: string, params: unknown[]): Promise<T | null> {
+	async get<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
-			return (this.#db.prepare(sql).get(...params) as T) ?? null;
+			const sql = buildSQL(strings, values);
+			return (this.#db.prepare(sql).get(...values) as T) ?? null;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async run(sql: string, params: unknown[]): Promise<number> {
+	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const result = this.#db.prepare(sql).run(...params);
+			const sql = buildSQL(strings, values);
+			const result = this.#db.prepare(sql).run(...values);
 			return result.changes;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async val<T>(sql: string, params: unknown[]): Promise<T> {
+	async val<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
+			const sql = buildSQL(strings, values);
 			return this.#db
 				.prepare(sql)
 				.pluck()
-				.get(...params) as T;
+				.get(...values) as T;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
-	}
-
-	escapeIdentifier(name: string): string {
-		// SQLite: wrap in double quotes, double any embedded quotes
-		return `"${name.replace(/"/g, '""')}"`;
 	}
 
 	async close(): Promise<void> {
@@ -145,54 +161,6 @@ export default class SQLiteDriver implements Driver {
 		}
 	}
 
-	async insert(
-		tableName: string,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown>> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const columnList = columns
-				.map((c) => this.escapeIdentifier(c))
-				.join(", ");
-			const placeholders = columns.map(() => "?").join(", ");
-
-			// SQLite supports RETURNING
-			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const row = this.#db.prepare(sql).get(...values) as Record<
-				string,
-				unknown
-			>;
-			return row;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
-	async update(
-		tableName: string,
-		primaryKey: string,
-		id: unknown,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown> | null> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const setClause = columns
-				.map((c) => `${this.escapeIdentifier(c)} = ?`)
-				.join(", ");
-
-			// SQLite supports RETURNING
-			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
-			const row = this.#db.prepare(sql).get(...values, id) as
-				| Record<string, unknown>
-				| undefined;
-			return row ?? null;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
 		// SQLite: BEGIN EXCLUSIVE acquires database-level write lock
 		// This prevents all other connections from reading or writing
@@ -204,21 +172,6 @@ export default class SQLiteDriver implements Driver {
 		} catch (error) {
 			this.#db.exec("ROLLBACK");
 			throw error;
-		}
-	}
-
-	async explain(
-		query: string,
-		params: unknown[],
-	): Promise<Record<string, unknown>[]> {
-		try {
-			const explainSQL = `EXPLAIN QUERY PLAN ${query}`;
-			return this.#db.prepare(explainSQL).all(...params) as Record<
-				string,
-				unknown
-			>[];
-		} catch (error) {
-			this.#handleError(error);
 		}
 	}
 }

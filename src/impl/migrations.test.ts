@@ -1,21 +1,34 @@
 import {test, expect, describe, mock} from "bun:test";
 import {Database, DatabaseUpgradeEvent, type Driver} from "./database.js";
 
+// Helper to build SQL from template parts
+function buildSql(strings: TemplateStringsArray): string {
+	return strings.join("?");
+}
+
 // In-memory SQLite-like driver for testing
 function createTestDriver(): Driver & {tables: Map<string, any[]>} {
 	const tables = new Map<string, any[]>();
 
-	return {
-		dialect: "sqlite" as const,
+	const driver: Driver & {tables: Map<string, any[]>} = {
+		supportsReturning: true,
 		tables,
-		async all<T>(sql: string, _params: unknown[]): Promise<T[]> {
+		async all<T>(
+			strings: TemplateStringsArray,
+			_values: unknown[],
+		): Promise<T[]> {
+			const sql = buildSql(strings);
 			// Simple mock - just handle _migrations table
 			if (sql.includes("_migrations")) {
 				return (tables.get("_migrations") ?? []) as T[];
 			}
 			return [];
 		},
-		async get<T>(sql: string, _params: unknown[]): Promise<T | null> {
+		async get<T>(
+			strings: TemplateStringsArray,
+			_values: unknown[],
+		): Promise<T | null> {
+			const sql = buildSql(strings);
 			if (sql.includes("MAX(version)")) {
 				const migrations = tables.get("_migrations") ?? [];
 				if (migrations.length === 0) return {version: null} as T;
@@ -24,17 +37,21 @@ function createTestDriver(): Driver & {tables: Map<string, any[]>} {
 			}
 			return null;
 		},
-		async run(sql: string, params: unknown[]): Promise<number> {
+		async run(
+			strings: TemplateStringsArray,
+			values: unknown[],
+		): Promise<number> {
+			const sql = buildSql(strings);
 			if (sql.includes("CREATE TABLE") && sql.includes("_migrations")) {
 				if (!tables.has("_migrations")) {
 					tables.set("_migrations", []);
 				}
 				return 0;
 			}
-			if (sql.includes("INSERT INTO _migrations")) {
+			if (sql.includes("INSERT INTO") && sql.includes("_migrations")) {
 				const migrations = tables.get("_migrations") ?? [];
 				migrations.push({
-					version: params[0],
+					version: values[0],
 					applied_at: new Date().toISOString(),
 				});
 				tables.set("_migrations", migrations);
@@ -48,31 +65,22 @@ function createTestDriver(): Driver & {tables: Map<string, any[]>} {
 			}
 			return 0;
 		},
-		async val<T>(_sql: string, _params: unknown[]): Promise<T> {
+		async val<T>(
+			_strings: TemplateStringsArray,
+			_values: unknown[],
+		): Promise<T | null> {
 			return 0 as T;
-		},
-		escapeIdentifier(name: string): string {
-			return `"${name.replace(/"/g, '""')}"`;
 		},
 		async close(): Promise<void> {
 			// No-op for test driver
 		},
 		async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 			// Simple transaction - just execute the function with this driver
-			return await fn(this as Driver);
-		},
-		async insert(_tableName: string, data: Record<string, unknown>) {
-			return data;
-		},
-		async update(
-			_tableName: string,
-			_pk: string,
-			_id: unknown,
-			data: Record<string, unknown>,
-		) {
-			return data;
+			return await fn(driver);
 		},
 	};
+
+	return driver;
 }
 
 describe("Database migrations", () => {

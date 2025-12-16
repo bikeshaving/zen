@@ -12,6 +12,17 @@ import {ConstraintViolationError} from "./zealot.js";
 import mysql from "mysql2/promise";
 
 /**
+ * Build SQL from template parts using ? placeholders.
+ */
+function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
+	let sql = strings[0];
+	for (let i = 1; i < strings.length; i++) {
+		sql += "?" + strings[i];
+	}
+	return sql;
+}
+
+/**
  * Options for the mysql adapter.
  */
 export interface MySQLOptions {
@@ -43,7 +54,7 @@ export interface MySQLOptions {
  * await driver.close();
  */
 export default class MySQLDriver implements Driver {
-	readonly dialect = "mysql" as const;
+	readonly supportsReturning = false;
 	#pool: mysql.Pool;
 
 	constructor(url: string, options: MySQLOptions = {}) {
@@ -63,10 +74,6 @@ export default class MySQLDriver implements Driver {
 			const code = (error as any).code;
 			const message = (error as any).message || String(error);
 
-			// MySQL constraint violations
-			// ER_DUP_ENTRY = duplicate key/unique constraint
-			// ER_NO_REFERENCED_ROW_2 = foreign key constraint (insert)
-			// ER_ROW_IS_REFERENCED_2 = foreign key constraint (delete)
 			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" =
 				"unknown";
 			let constraint: string | undefined;
@@ -75,10 +82,8 @@ export default class MySQLDriver implements Driver {
 
 			if (code === "ER_DUP_ENTRY") {
 				kind = "unique";
-				// Example: "Duplicate entry 'value' for key 'table.index_name'"
 				const keyMatch = message.match(/for key '([^']+)'/i);
 				constraint = keyMatch ? keyMatch[1] : undefined;
-				// Extract table from constraint name (e.g., "users.email_unique" -> "users")
 				if (constraint) {
 					const parts = constraint.split(".");
 					if (parts.length > 1) {
@@ -90,12 +95,11 @@ export default class MySQLDriver implements Driver {
 				code === "ER_ROW_IS_REFERENCED_2"
 			) {
 				kind = "foreign_key";
-				// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
 				const constraintMatch = message.match(/CONSTRAINT `([^`]+)`/i);
 				constraint = constraintMatch ? constraintMatch[1] : undefined;
 				const tableMatch = message.match(/`([^`]+)`\.`([^`]+)`/);
 				if (tableMatch) {
-					table = tableMatch[2]; // Second match is table name
+					table = tableMatch[2];
 				}
 			}
 
@@ -121,48 +125,53 @@ export default class MySQLDriver implements Driver {
 		throw error;
 	}
 
-	async all<T>(sql: string, params: unknown[]): Promise<T[]> {
+	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const [rows] = await this.#pool.execute(sql, params);
+			const sql = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, values);
 			return rows as T[];
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async get<T>(sql: string, params: unknown[]): Promise<T | null> {
+	async get<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
-			const [rows] = await this.#pool.execute(sql, params);
+			const sql = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, values);
 			return ((rows as unknown[])[0] as T) ?? null;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async run(sql: string, params: unknown[]): Promise<number> {
+	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const [result] = await this.#pool.execute(sql, params);
+			const sql = buildSQL(strings, values);
+			const [result] = await this.#pool.execute(sql, values);
 			return (result as mysql.ResultSetHeader).affectedRows ?? 0;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async val<T>(sql: string, params: unknown[]): Promise<T> {
+	async val<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
-			const [rows] = await this.#pool.execute(sql, params);
+			const sql = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, values);
 			const row = (rows as unknown[])[0];
-			if (!row) return null as T;
-			const values = Object.values(row as object);
-			return values[0] as T;
+			if (!row) return null;
+			const rowValues = Object.values(row as object);
+			return rowValues[0] as T;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
-	}
-
-	escapeIdentifier(name: string): string {
-		// MySQL: wrap in backticks, double any embedded backticks
-		return `\`${name.replace(/`/g, "``")}\``;
 	}
 
 	async close(): Promise<void> {
@@ -170,101 +179,70 @@ export default class MySQLDriver implements Driver {
 	}
 
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
-		// mysql2: get a dedicated connection from pool for transaction
 		const connection = await this.#pool.getConnection();
+		const handleError = this.#handleError.bind(this);
+
 		try {
 			await connection.execute("START TRANSACTION", []);
 
-			// Create a transaction-bound driver that uses this connection
 			const txDriver: Driver = {
-				dialect: "mysql",
-				all: async <R>(sql: string, params: unknown[]): Promise<R[]> => {
+				supportsReturning: false,
+				all: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R[]> => {
 					try {
-						const [rows] = await connection.execute(sql, params);
+						const sql = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, values);
 						return rows as R[];
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				get: async <R>(sql: string, params: unknown[]): Promise<R | null> => {
+				get: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R | null> => {
 					try {
-						const [rows] = await connection.execute(sql, params);
+						const sql = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, values);
 						return ((rows as unknown[])[0] as R) ?? null;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				run: async (sql: string, params: unknown[]): Promise<number> => {
+				run: async (
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<number> => {
 					try {
-						const [result] = await connection.execute(sql, params);
+						const sql = buildSQL(strings, values);
+						const [result] = await connection.execute(sql, values);
 						return (result as mysql.ResultSetHeader).affectedRows ?? 0;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				val: async <R>(sql: string, params: unknown[]): Promise<R> => {
+				val: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R | null> => {
 					try {
-						const [rows] = await connection.execute(sql, params);
+						const sql = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, values);
 						const row = (rows as unknown[])[0];
-						if (!row) return null as R;
-						const values = Object.values(row as object);
-						return values[0] as R;
+						if (!row) return null;
+						const rowValues = Object.values(row as object);
+						return rowValues[0] as R;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				escapeIdentifier: this.escapeIdentifier.bind(this),
 				close: async () => {
 					// No-op for transaction driver
 				},
 				transaction: async () => {
 					throw new Error("Nested transactions are not supported");
-				},
-				insert: async (
-					tableName: string,
-					data: Record<string, unknown>,
-				): Promise<Record<string, unknown>> => {
-					try {
-						const columns = Object.keys(data);
-						const values = Object.values(data);
-						const columnList = columns
-							.map((c) => this.escapeIdentifier(c))
-							.join(", ");
-						const placeholders = columns.map(() => "?").join(", ");
-						const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
-						await connection.execute(insertSql, values);
-						// MySQL doesn't support RETURNING - return data as-is
-						return data;
-					} catch (error) {
-						this.#handleError(error);
-					}
-				},
-				update: async (
-					tableName: string,
-					primaryKey: string,
-					id: unknown,
-					data: Record<string, unknown>,
-				): Promise<Record<string, unknown> | null> => {
-					try {
-						const columns = Object.keys(data);
-						const values = Object.values(data);
-						const setClause = columns
-							.map((c) => `${this.escapeIdentifier(c)} = ?`)
-							.join(", ");
-						const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-						const [result] = await connection.execute(updateSql, [
-							...values,
-							id,
-						]);
-						if ((result as mysql.ResultSetHeader).affectedRows === 0) {
-							return null;
-						}
-						const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-						const [rows] = await connection.execute(selectSql, [id]);
-						return (rows as unknown[])[0] as Record<string, unknown>;
-					} catch (error) {
-						this.#handleError(error);
-					}
 				},
 			};
 
@@ -279,65 +257,7 @@ export default class MySQLDriver implements Driver {
 		}
 	}
 
-	async insert(
-		tableName: string,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown>> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const columnList = columns
-				.map((c) => this.escapeIdentifier(c))
-				.join(", ");
-			const placeholders = columns.map(() => "?").join(", ");
-
-			// MySQL doesn't support RETURNING - need to INSERT then SELECT
-			const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
-			await this.#pool.execute(insertSql, values);
-
-			// Get the inserted row using LAST_INSERT_ID() if there's an auto-increment
-			// For now, just return the data as-is (caller should handle defaults)
-			// TODO: This is a limitation - MySQL doesn't give us DB defaults easily
-			return data;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
-	async update(
-		tableName: string,
-		primaryKey: string,
-		id: unknown,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown> | null> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const setClause = columns
-				.map((c) => `${this.escapeIdentifier(c)} = ?`)
-				.join(", ");
-
-			// MySQL doesn't support RETURNING - need to UPDATE then SELECT
-			const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-			const [result] = await this.#pool.execute(updateSql, [...values, id]);
-
-			// Check if row was updated
-			if ((result as mysql.ResultSetHeader).affectedRows === 0) {
-				return null;
-			}
-
-			// SELECT the updated row
-			const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-			const [rows] = await this.#pool.execute(selectSql, [id]);
-			return (rows as unknown[])[0] as Record<string, unknown>;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
-		// Use MySQL named lock for migrations
-		// Timeout of 10 seconds to acquire lock
 		const LOCK_NAME = "zealot_migration";
 		const LOCK_TIMEOUT = 10;
 
@@ -357,19 +277,6 @@ export default class MySQLDriver implements Driver {
 			return await fn();
 		} finally {
 			await this.#pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
-		}
-	}
-
-	async explain(
-		query: string,
-		params: unknown[],
-	): Promise<Record<string, unknown>[]> {
-		try {
-			const explainSQL = `EXPLAIN ${query}`;
-			const [rows] = await this.#pool.execute(explainSQL, params);
-			return rows as Record<string, unknown>[];
-		} catch (error) {
-			this.#handleError(error);
 		}
 	}
 }

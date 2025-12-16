@@ -23,108 +23,6 @@ const Posts = table("posts", {
 	viewCount: z.number().int().default(0),
 });
 
-describe("Table.where()", () => {
-	test("simple equality with qualified column", () => {
-		const fragment = Posts.where({published: true});
-		expect(fragment.sql).toBe('"posts"."published" = ?');
-		expect(fragment.params).toEqual([true]);
-	});
-
-	test("multiple conditions (AND-joined)", () => {
-		const fragment = Posts.where({published: true, title: "Hello"});
-		expect(fragment.sql).toBe(
-			'"posts"."published" = ? AND "posts"."title" = ?',
-		);
-		expect(fragment.params).toEqual([true, "Hello"]);
-	});
-
-	test("qualifies field names with table", () => {
-		const fragment = Posts.where({viewCount: 100});
-		expect(fragment.sql).toBe('"posts"."viewCount" = ?');
-		expect(fragment.params).toEqual([100]);
-	});
-
-	test("$eq operator", () => {
-		const fragment = Posts.where({published: {$eq: true}});
-		expect(fragment.sql).toBe('"posts"."published" = ?');
-		expect(fragment.params).toEqual([true]);
-	});
-
-	test("$neq operator", () => {
-		const fragment = Users.where({role: {$neq: "admin"}});
-		expect(fragment.sql).toBe('"users"."role" != ?');
-		expect(fragment.params).toEqual(["admin"]);
-	});
-
-	test("$lt operator", () => {
-		const fragment = Posts.where({viewCount: {$lt: 100}});
-		expect(fragment.sql).toBe('"posts"."viewCount" < ?');
-		expect(fragment.params).toEqual([100]);
-	});
-
-	test("$gt operator", () => {
-		const fragment = Posts.where({viewCount: {$gt: 50}});
-		expect(fragment.sql).toBe('"posts"."viewCount" > ?');
-		expect(fragment.params).toEqual([50]);
-	});
-
-	test("$lte operator", () => {
-		const fragment = Posts.where({viewCount: {$lte: 100}});
-		expect(fragment.sql).toBe('"posts"."viewCount" <= ?');
-		expect(fragment.params).toEqual([100]);
-	});
-
-	test("$gte operator", () => {
-		const fragment = Posts.where({viewCount: {$gte: 50}});
-		expect(fragment.sql).toBe('"posts"."viewCount" >= ?');
-		expect(fragment.params).toEqual([50]);
-	});
-
-	test("$like operator", () => {
-		const fragment = Posts.where({title: {$like: "%hello%"}});
-		expect(fragment.sql).toBe('"posts"."title" LIKE ?');
-		expect(fragment.params).toEqual(["%hello%"]);
-	});
-
-	test("$in operator", () => {
-		const fragment = Users.where({role: {$in: ["user", "admin"]}});
-		expect(fragment.sql).toBe('"users"."role" IN (?, ?)');
-		expect(fragment.params).toEqual(["user", "admin"]);
-	});
-
-	test("$isNull operator (true)", () => {
-		const fragment = Posts.where({title: {$isNull: true}});
-		expect(fragment.sql).toBe('"posts"."title" IS NULL');
-		expect(fragment.params).toEqual([]);
-	});
-
-	test("$isNull operator (false)", () => {
-		const fragment = Posts.where({title: {$isNull: false}});
-		expect(fragment.sql).toBe('"posts"."title" IS NOT NULL');
-		expect(fragment.params).toEqual([]);
-	});
-
-	test("multiple operators on same field", () => {
-		const fragment = Posts.where({viewCount: {$gte: 10, $lte: 100}});
-		expect(fragment.sql).toBe(
-			'"posts"."viewCount" >= ? AND "posts"."viewCount" <= ?',
-		);
-		expect(fragment.params).toEqual([10, 100]);
-	});
-
-	test("empty conditions returns 1 = 1", () => {
-		const fragment = Posts.where({});
-		expect(fragment.sql).toBe("1 = 1");
-		expect(fragment.params).toEqual([]);
-	});
-
-	test("skips undefined values", () => {
-		const fragment = Posts.where({published: true, title: undefined});
-		expect(fragment.sql).toBe('"posts"."published" = ?');
-		expect(fragment.params).toEqual([true]);
-	});
-});
-
 describe("Table.set()", () => {
 	test("single field with quoted name", () => {
 		const fragment = Posts.set({title: "New Title"});
@@ -349,17 +247,20 @@ describe("Table.in()", () => {
 });
 
 describe("fragment interpolation in parseTemplate", () => {
-	test("where fragment in template", () => {
-		const fragment = Posts.where({published: true});
+	const uuid1 = "550e8400-e29b-41d4-a716-446655440001";
+	const uuid2 = "550e8400-e29b-41d4-a716-446655440002";
+
+	test("in() fragment in template", () => {
+		const fragment = Posts.in("id", [uuid1]);
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(strings, [fragment], "sqlite");
 
-		expect(sql).toBe('WHERE "posts"."published" = ?');
-		expect(params).toEqual([true]);
+		expect(sql).toBe('WHERE "posts"."id" IN (?)');
+		expect(params).toEqual([uuid1]);
 	});
 
 	test("multiple fragments in template", () => {
-		const whereFragment = Posts.where({published: true});
+		const inFragment = Posts.in("id", [uuid1, uuid2]);
 		const setFragment = Posts.set({title: "Updated"});
 		const strings = [
 			"UPDATE posts SET ",
@@ -368,51 +269,47 @@ describe("fragment interpolation in parseTemplate", () => {
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[setFragment, whereFragment],
+			[setFragment, inFragment],
 			"sqlite",
 		);
 
 		expect(sql).toBe(
-			'UPDATE posts SET "title" = ? WHERE "posts"."published" = ?',
+			'UPDATE posts SET "title" = ? WHERE "posts"."id" IN (?, ?)',
 		);
-		expect(params).toEqual(["Updated", true]);
+		expect(params).toEqual(["Updated", uuid1, uuid2]);
 	});
 
 	test("fragment with regular values", () => {
-		const fragment = Posts.where({published: true});
+		const fragment = Posts.in("id", [uuid1]);
 		const strings = [
 			"SELECT * FROM posts WHERE ",
-			" AND id = ",
+			" AND published = ",
 			"",
 		] as unknown as TemplateStringsArray;
-		const {sql, params} = parseTemplate(
-			strings,
-			[fragment, "post-123"],
-			"sqlite",
-		);
+		const {sql, params} = parseTemplate(strings, [fragment, true], "sqlite");
 
 		expect(sql).toBe(
-			'SELECT * FROM posts WHERE "posts"."published" = ? AND id = ?',
+			'SELECT * FROM posts WHERE "posts"."id" IN (?) AND published = ?',
 		);
-		expect(params).toEqual([true, "post-123"]);
+		expect(params).toEqual([uuid1, true]);
 	});
 
 	test("postgresql placeholders", () => {
-		const fragment = Posts.where({published: true, title: "Hello"});
+		const fragment = Posts.in("id", [uuid1, uuid2]);
 		const strings = [
 			"SELECT * FROM posts WHERE ",
-			" AND id = ",
+			" AND published = ",
 			"",
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[fragment, "post-123"],
+			[fragment, true],
 			"postgresql",
 		);
 
 		expect(sql).toBe(
-			'SELECT * FROM posts WHERE "posts"."published" = $1 AND "posts"."title" = $2 AND id = $3',
+			'SELECT * FROM posts WHERE "posts"."id" IN ($1, $2) AND published = $3',
 		);
-		expect(params).toEqual([true, "Hello", "post-123"]);
+		expect(params).toEqual([uuid1, uuid2, true]);
 	});
 });

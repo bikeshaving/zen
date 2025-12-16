@@ -9,6 +9,21 @@ import {Database, type Driver} from "./database.js";
 
 extendZod(z);
 
+// Helper to create mock drivers
+function createMockDriver(overrides: Partial<Driver> = {}): Driver {
+	const driver: Driver = {
+		supportsReturning: true,
+		all: async () => [],
+		get: async () => null,
+		run: async () => 0,
+		val: async () => null,
+		close: async () => {},
+		transaction: async (fn) => fn(driver),
+		...overrides,
+	};
+	return driver;
+}
+
 // =============================================================================
 // Issue #1: val() type should be Promise<T | null>, not Promise<T>
 // =============================================================================
@@ -17,18 +32,9 @@ describe("Issue #1: val() type safety", () => {
 	test("val() should have correct return type allowing null", () => {
 		// This is a compile-time check - if val() returns Promise<T | null>,
 		// this code should compile without error
-		const driver: Driver = {
-			dialect: "sqlite",
-			all: async () => [],
-			get: async () => null,
-			run: async () => 0,
+		const driver = createMockDriver({
 			val: async <T>(): Promise<T | null> => null, // Should match interface
-			escapeIdentifier: (n) => `"${n}"`,
-			close: async () => {},
-			transaction: async (fn) => fn({} as Driver),
-			insert: async (_, data) => data,
-			update: async () => null,
-		};
+		});
 
 		expect(driver.val).toBeDefined();
 	});
@@ -54,30 +60,6 @@ describe("Issue #3: Empty array in in() clause", () => {
 });
 
 // =============================================================================
-// Issue #4: Conflicting operators should be validated
-// =============================================================================
-
-describe("Issue #4: Conflicting operators in where conditions", () => {
-	const Users = table("users", {
-		id: z.string().db.primary(),
-		age: z.number(),
-	});
-
-	test("$eq and $neq on same field should throw", () => {
-		expect(() => {
-			Users.where({age: {$eq: 5, $neq: 5}});
-		}).toThrow(/conflict/i);
-	});
-
-	test("$gt and $lt creating impossible range should throw", () => {
-		// $gt: 10 AND $lt: 5 is impossible (nothing is both > 10 and < 5)
-		expect(() => {
-			Users.where({age: {$gt: 10, $lt: 5}});
-		}).toThrow(/impossible|conflict/i);
-	});
-});
-
-// =============================================================================
 // Issue #5: JSON.parse failures should have clear error message
 // =============================================================================
 
@@ -88,20 +70,12 @@ describe("Issue #5: JSON decode error handling", () => {
 			config: z.object({theme: z.string()}),
 		});
 
-		const driver: Driver = {
-			dialect: "sqlite",
+		const driver = createMockDriver({
 			all: async () =>
 				[{"settings.id": "1", "settings.config": "not-valid-json"}] as any,
 			get: async () =>
 				({"settings.id": "1", "settings.config": "not-valid-json"}) as any,
-			run: async () => 0,
-			val: async () => null,
-			escapeIdentifier: (n) => `"${n}"`,
-			close: async () => {},
-			transaction: async (fn) => fn({} as Driver),
-			insert: async (_, data) => data,
-			update: async () => null,
-		};
+		});
 
 		const db = new Database(driver);
 
@@ -177,20 +151,12 @@ describe("Issue #9: Date validation", () => {
 			startedAt: z.date(),
 		});
 
-		const driver: Driver = {
-			dialect: "sqlite",
+		const driver = createMockDriver({
 			all: async () =>
 				[{"events.id": "1", "events.startedAt": "not-a-date"}] as any,
 			get: async () =>
 				({"events.id": "1", "events.startedAt": "not-a-date"}) as any,
-			run: async () => 0,
-			val: async () => null,
-			escapeIdentifier: (n) => `"${n}"`,
-			close: async () => {},
-			transaction: async (fn) => fn({} as Driver),
-			insert: async (_, data) => data,
-			update: async () => null,
-		};
+		});
 
 		const db = new Database(driver);
 
@@ -276,27 +242,31 @@ describe("Issue #2: Migration race condition", () => {
 		let lockAcquired = false;
 		let tableCreatedWhileLocked = false;
 
+		// Helper to build SQL from template parts
+		const buildSql = (strings: TemplateStringsArray): string => {
+			return strings.join("?");
+		};
+
 		const driver: Driver = {
-			dialect: "sqlite",
+			supportsReturning: true,
 			all: async () => [],
-			get: async (sql: string) => {
+			get: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
 				if (sql.includes("MAX(version)")) {
 					return {version: 0} as any;
 				}
 				return null;
 			},
-			run: async (sql: string) => {
+			run: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
 				if (sql.includes("CREATE TABLE") && sql.includes("_migrations")) {
 					tableCreatedWhileLocked = lockAcquired;
 				}
 				return 0;
 			},
 			val: async () => null,
-			escapeIdentifier: (n) => `"${n}"`,
 			close: async () => {},
 			transaction: async (fn) => fn(driver),
-			insert: async (_, data) => data,
-			update: async () => null,
 			withMigrationLock: async (fn) => {
 				lockAcquired = true;
 				try {

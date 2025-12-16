@@ -29,7 +29,7 @@ describe("Transaction connection binding", () => {
 			const mainConnectionId = `main-${++connectionCounter}`;
 
 			return {
-				dialect: "sqlite",
+				supportsReturning: true,
 				all: mock(async () => {
 					operationConnections.push(mainConnectionId);
 					return [];
@@ -43,10 +43,7 @@ describe("Transaction connection binding", () => {
 					return 1;
 				}) as Driver["run"],
 				val: mock(async () => 0) as Driver["val"],
-				escapeIdentifier: (name: string) => `"${name}"`,
 				close: mock(async () => {}),
-				insert: mock(async (_tableName, data) => data) as Driver["insert"],
-				update: mock(async () => null) as Driver["update"],
 				transaction: mock(
 					async <T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> => {
 						// Create a transaction-specific connection ID
@@ -54,7 +51,7 @@ describe("Transaction connection binding", () => {
 
 						// Create a transaction-bound driver
 						const txDriver: Driver = {
-							dialect: "sqlite",
+							supportsReturning: true,
 							all: mock(async () => {
 								operationConnections.push(txConnectionId);
 								return [];
@@ -68,16 +65,7 @@ describe("Transaction connection binding", () => {
 								return 1;
 							}) as Driver["run"],
 							val: mock(async () => 0) as Driver["val"],
-							escapeIdentifier: (name: string) => `"${name}"`,
 							close: mock(async () => {}),
-							insert: mock(async (_tableName, data) => {
-								operationConnections.push(txConnectionId);
-								return data;
-							}) as Driver["insert"],
-							update: mock(async () => {
-								operationConnections.push(txConnectionId);
-								return null;
-							}) as Driver["update"],
 							transaction: mock(async () => {
 								throw new Error("Nested transactions not supported");
 							}) as Driver["transaction"],
@@ -116,15 +104,12 @@ describe("Transaction connection binding", () => {
 
 		const createConcurrencyTestDriver = (): Driver => {
 			return {
-				dialect: "sqlite",
+				supportsReturning: true,
 				all: mock(async () => []) as Driver["all"],
 				get: mock(async () => null) as Driver["get"],
 				run: mock(async () => 1) as Driver["run"],
 				val: mock(async () => 0) as Driver["val"],
-				escapeIdentifier: (name: string) => `"${name}"`,
 				close: mock(async () => {}),
-				insert: mock(async (_tableName, data) => data) as Driver["insert"],
-				update: mock(async () => null) as Driver["update"],
 				transaction: mock(
 					async <T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> => {
 						// Capture the transaction ID at start time
@@ -132,7 +117,7 @@ describe("Transaction connection binding", () => {
 						const txConnectionId = `tx-${txId}`;
 
 						const txDriver: Driver = {
-							dialect: "sqlite",
+							supportsReturning: true,
 							all: mock(async () => {
 								// Use captured txId, not the current connectionCounter
 								operations.push({txId, connectionId: txConnectionId});
@@ -141,12 +126,7 @@ describe("Transaction connection binding", () => {
 							get: mock(async () => null) as Driver["get"],
 							run: mock(async () => 1) as Driver["run"],
 							val: mock(async () => 0) as Driver["val"],
-							escapeIdentifier: (name: string) => `"${name}"`,
 							close: mock(async () => {}),
-							insert: mock(
-								async (_tableName, data) => data,
-							) as Driver["insert"],
-							update: mock(async () => null) as Driver["update"],
 							transaction: mock(async () => {
 								throw new Error("Nested transactions not supported");
 							}) as Driver["transaction"],
@@ -198,55 +178,55 @@ describe("Transaction connection binding", () => {
 		// Each connection should have exactly 2 operations from the same transaction
 		for (const [_connectionId, txIds] of byConnection) {
 			expect(txIds.length).toBe(2);
-			expect(new Set(txIds).size).toBe(1); // All from same transaction
+			// All txIds in this connection should be the same
+			expect(new Set(txIds).size).toBe(1);
 		}
 	});
 });
 
-describe("Driver.transaction() interface", () => {
-	test("transaction callback receives transaction-bound driver", async () => {
-		let receivedDriver: Driver | undefined;
+describe("Transaction rollback on error", () => {
+	test("transaction should be rolled back if function throws", async () => {
+		let commitCalled = false;
+		let rollbackCalled = false;
 
 		const driver: Driver = {
-			dialect: "sqlite",
+			supportsReturning: true,
 			all: mock(async () => []) as Driver["all"],
 			get: mock(async () => null) as Driver["get"],
-			run: mock(async () => 1) as Driver["run"],
+			run: mock(async (strings: TemplateStringsArray) => {
+				const sql = strings.join("?");
+				if (sql.includes("COMMIT")) commitCalled = true;
+				if (sql.includes("ROLLBACK")) rollbackCalled = true;
+				return 1;
+			}) as Driver["run"],
 			val: mock(async () => 0) as Driver["val"],
-			escapeIdentifier: (name: string) => `"${name}"`,
 			close: mock(async () => {}),
-			insert: mock(async (_tableName, data) => data) as Driver["insert"],
-			update: mock(async () => null) as Driver["update"],
 			transaction: mock(
 				async <T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> => {
-					// Create a distinct transaction driver
-					const txDriver: Driver = {
-						dialect: "sqlite",
-						all: mock(async () => []) as Driver["all"],
-						get: mock(async () => null) as Driver["get"],
-						run: mock(async () => 1) as Driver["run"],
-						val: mock(async () => 0) as Driver["val"],
-						escapeIdentifier: (name: string) => `"${name}"`,
-						close: mock(async () => {}),
-						insert: mock(async (_tableName, data) => data) as Driver["insert"],
-						update: mock(async () => null) as Driver["update"],
-						transaction: mock(async () => {
-							throw new Error("Nested transactions not supported");
-						}) as Driver["transaction"],
-					};
-					receivedDriver = txDriver;
-					return await fn(txDriver);
+					// Simulate a real transaction that tracks commit/rollback
+					try {
+						const result = await fn(driver);
+						commitCalled = true;
+						return result;
+					} catch (error) {
+						rollbackCalled = true;
+						throw error;
+					}
 				},
 			) as Driver["transaction"],
 		};
 
 		const db = new Database(driver);
 
-		await db.transaction(async (_tx) => {
-			// The tx should use the transaction driver
-		});
+		// Transaction that throws
+		await expect(
+			db.transaction(async (_tx) => {
+				throw new Error("Something went wrong");
+			}),
+		).rejects.toThrow("Something went wrong");
 
-		expect(receivedDriver).toBeDefined();
-		expect(receivedDriver).not.toBe(driver);
+		// Rollback should have been called, not commit
+		expect(rollbackCalled).toBe(true);
+		expect(commitCalled).toBe(false);
 	});
 });

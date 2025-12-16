@@ -12,6 +12,17 @@ import {ConstraintViolationError} from "./zealot.js";
 import postgres from "postgres";
 
 /**
+ * Build SQL from template parts using $1, $2, etc. placeholders.
+ */
+function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
+	let sql = strings[0];
+	for (let i = 1; i < strings.length; i++) {
+		sql += `$${i}` + strings[i];
+	}
+	return sql;
+}
+
+/**
  * Options for the postgres adapter.
  */
 export interface PostgresOptions {
@@ -43,7 +54,7 @@ export interface PostgresOptions {
  * await driver.close();
  */
 export default class PostgresDriver implements Driver {
-	readonly dialect = "postgresql" as const;
+	readonly supportsReturning = true;
 	#sql: ReturnType<typeof postgres>;
 
 	constructor(url: string, options: PostgresOptions = {}) {
@@ -66,11 +77,6 @@ export default class PostgresDriver implements Driver {
 			const table = (error as any).table_name || (error as any).table;
 			const column = (error as any).column_name || (error as any).column;
 
-			// PostgreSQL constraint violations
-			// 23505 = unique_violation
-			// 23503 = foreign_key_violation
-			// 23514 = check_violation
-			// 23502 = not_null_violation
 			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" =
 				"unknown";
 			if (code === "23505") kind = "unique";
@@ -96,48 +102,53 @@ export default class PostgresDriver implements Driver {
 		throw error;
 	}
 
-	async all<T>(query: string, params: unknown[]): Promise<T[]> {
+	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const result = await this.#sql.unsafe<T[]>(query, params as any[]);
+			const sql = buildSQL(strings, values);
+			const result = await this.#sql.unsafe<T[]>(sql, values as any[]);
 			return result;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async get<T>(query: string, params: unknown[]): Promise<T | null> {
+	async get<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
-			const result = await this.#sql.unsafe<T[]>(query, params as any[]);
+			const sql = buildSQL(strings, values);
+			const result = await this.#sql.unsafe<T[]>(sql, values as any[]);
 			return result[0] ?? null;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async run(query: string, params: unknown[]): Promise<number> {
+	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const result = await this.#sql.unsafe(query, params as any[]);
+			const sql = buildSQL(strings, values);
+			const result = await this.#sql.unsafe(sql, values as any[]);
 			return result.count;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
 	}
 
-	async val<T>(query: string, params: unknown[]): Promise<T> {
+	async val<T>(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<T | null> {
 		try {
-			const result = await this.#sql.unsafe(query, params as any[]);
+			const sql = buildSQL(strings, values);
+			const result = await this.#sql.unsafe(sql, values as any[]);
 			const row = result[0];
-			if (!row) return null as T;
-			const values = Object.values(row as object);
-			return values[0] as T;
+			if (!row) return null;
+			const rowValues = Object.values(row as object);
+			return rowValues[0] as T;
 		} catch (error) {
-			this.#handleError(error);
+			return this.#handleError(error);
 		}
-	}
-
-	escapeIdentifier(name: string): string {
-		// PostgreSQL: wrap in double quotes, double any embedded quotes
-		return `"${name.replace(/"/g, '""')}"`;
 	}
 
 	async close(): Promise<void> {
@@ -145,89 +156,67 @@ export default class PostgresDriver implements Driver {
 	}
 
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
-		// postgres.js has native transaction support with sql.begin()
+		const handleError = this.#handleError.bind(this);
+
 		const result = await this.#sql.begin(async (txSql) => {
-			// Create a transaction-bound driver that uses the transaction SQL
 			const txDriver: Driver = {
-				dialect: "postgresql",
-				all: async <R>(query: string, params: unknown[]): Promise<R[]> => {
+				supportsReturning: true,
+				all: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R[]> => {
 					try {
-						const result = await txSql.unsafe<R[]>(query, params as any[]);
+						const sql = buildSQL(strings, values);
+						const result = await txSql.unsafe<R[]>(sql, values as any[]);
 						return result;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				get: async <R>(query: string, params: unknown[]): Promise<R | null> => {
+				get: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R | null> => {
 					try {
-						const result = await txSql.unsafe<R[]>(query, params as any[]);
+						const sql = buildSQL(strings, values);
+						const result = await txSql.unsafe<R[]>(sql, values as any[]);
 						return result[0] ?? null;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				run: async (query: string, params: unknown[]): Promise<number> => {
+				run: async (
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<number> => {
 					try {
-						const result = await txSql.unsafe(query, params as any[]);
+						const sql = buildSQL(strings, values);
+						const result = await txSql.unsafe(sql, values as any[]);
 						return result.count;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				val: async <R>(query: string, params: unknown[]): Promise<R> => {
+				val: async <R>(
+					strings: TemplateStringsArray,
+					values: unknown[],
+				): Promise<R | null> => {
 					try {
-						const result = await txSql.unsafe(query, params as any[]);
+						const sql = buildSQL(strings, values);
+						const result = await txSql.unsafe(sql, values as any[]);
 						const row = result[0];
-						if (!row) return null as R;
-						const values = Object.values(row as object);
-						return values[0] as R;
+						if (!row) return null;
+						const rowValues = Object.values(row as object);
+						return rowValues[0] as R;
 					} catch (error) {
-						this.#handleError(error);
+						return handleError(error);
 					}
 				},
-				escapeIdentifier: this.escapeIdentifier.bind(this),
 				close: async () => {
 					// No-op for transaction driver
 				},
 				transaction: async () => {
 					throw new Error("Nested transactions are not supported");
-				},
-				insert: async (
-					tableName: string,
-					data: Record<string, unknown>,
-				): Promise<Record<string, unknown>> => {
-					try {
-						const columns = Object.keys(data);
-						const values = Object.values(data);
-						const columnList = columns
-							.map((c) => this.escapeIdentifier(c))
-							.join(", ");
-						const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-						const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-						const result = await txSql.unsafe(sql, values as any[]);
-						return result[0] as Record<string, unknown>;
-					} catch (error) {
-						this.#handleError(error);
-					}
-				},
-				update: async (
-					tableName: string,
-					primaryKey: string,
-					id: unknown,
-					data: Record<string, unknown>,
-				): Promise<Record<string, unknown> | null> => {
-					try {
-						const columns = Object.keys(data);
-						const values = Object.values(data);
-						const setClause = columns
-							.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
-							.join(", ");
-						const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
-						const result = await txSql.unsafe(sql, [...values, id] as any[]);
-						return result[0] ?? null;
-					} catch (error) {
-						this.#handleError(error);
-					}
 				},
 			};
 
@@ -236,52 +225,7 @@ export default class PostgresDriver implements Driver {
 		return result as T;
 	}
 
-	async insert(
-		tableName: string,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown>> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const columnList = columns
-				.map((c) => this.escapeIdentifier(c))
-				.join(", ");
-			const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-
-			// PostgreSQL supports RETURNING
-			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const result = await this.#sql.unsafe(sql, values as any[]);
-			return result[0] as Record<string, unknown>;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
-	async update(
-		tableName: string,
-		primaryKey: string,
-		id: unknown,
-		data: Record<string, unknown>,
-	): Promise<Record<string, unknown> | null> {
-		try {
-			const columns = Object.keys(data);
-			const values = Object.values(data);
-			const setClause = columns
-				.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
-				.join(", ");
-
-			// PostgreSQL supports RETURNING
-			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
-			const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
-			return result[0] ?? null;
-		} catch (error) {
-			this.#handleError(error);
-		}
-	}
-
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
-		// Use PostgreSQL advisory lock with a fixed lock ID for migrations
-		// 1952393421 = crc32("zealot_migration") for uniqueness
 		const MIGRATION_LOCK_ID = 1952393421;
 
 		await this.#sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_ID})`;
@@ -289,22 +233,6 @@ export default class PostgresDriver implements Driver {
 			return await fn();
 		} finally {
 			await this.#sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_ID})`;
-		}
-	}
-
-	async explain(
-		query: string,
-		params: unknown[],
-	): Promise<Record<string, unknown>[]> {
-		try {
-			const explainSQL = `EXPLAIN ${query}`;
-			const result = await this.#sql.unsafe<Record<string, unknown>[]>(
-				explainSQL,
-				params as any[],
-			);
-			return result;
-		} catch (error) {
-			this.#handleError(error);
 		}
 	}
 }
