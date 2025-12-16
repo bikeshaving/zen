@@ -12,7 +12,6 @@ export {
 	type Table,
 	type PartialTable,
 	type DerivedTable,
-	type DerivedExpr,
 	type TableOptions,
 	type ReferenceInfo,
 	type CompoundReference,

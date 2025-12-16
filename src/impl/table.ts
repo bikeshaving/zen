@@ -1323,7 +1323,18 @@ function createTableObject(
 			}
 
 			// Filter metadata
-			const pickedMeta = {
+			const existingDerivedExprs: DerivedExpr[] = (meta as any).derivedExprs ?? [];
+			const existingDerivedFields: string[] = (meta as any).derivedFields ?? [];
+
+			// Filter derived expressions to only those for picked fields
+			const pickedDerivedExprs = existingDerivedExprs.filter((expr) =>
+				fieldSet.has(expr.fieldName),
+			);
+			const pickedDerivedFields = existingDerivedFields.filter((f) =>
+				fieldSet.has(f),
+			);
+
+			const pickedMeta: Record<string, any> = {
 				primary:
 					meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
 				unique: meta.unique.filter((f) => fieldSet.has(f)),
@@ -1338,6 +1349,13 @@ function createTableObject(
 				),
 				isPartial: true,
 			};
+
+			// Preserve derived metadata if any derived fields are picked
+			if (pickedDerivedExprs.length > 0) {
+				pickedMeta.isDerived = true;
+				pickedMeta.derivedExprs = pickedDerivedExprs;
+				pickedMeta.derivedFields = pickedDerivedFields;
+			}
 
 			// Filter indexes to only those with all fields present
 			const pickedIndexes = (options.indexes ?? []).filter((idx) =>

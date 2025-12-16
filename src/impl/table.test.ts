@@ -519,6 +519,36 @@ describe("Table.derive()", () => {
 			}),
 		).toThrow();
 	});
+
+	test("derive then pick preserves derived metadata", () => {
+		const WithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
+		const Picked = WithCount.pick("id", "likeCount");
+
+		expect((Picked._meta as any).isDerived).toBe(true);
+		expect((Picked._meta as any).derivedExprs).toHaveLength(1);
+		expect((Picked._meta as any).derivedFields).toEqual(["likeCount"]);
+		expect(Object.keys(Picked.schema.shape)).toEqual(["id", "likeCount"]);
+	});
+
+	test("derive then pick excludes non-picked derived fields", () => {
+		const WithStats = Posts
+			.derive("likeCount", z.number())`COUNT(likes.id)`
+			.derive("commentCount", z.number())`COUNT(comments.id)`;
+		const Picked = WithStats.pick("id", "likeCount");
+
+		expect((Picked._meta as any).derivedExprs).toHaveLength(1);
+		expect((Picked._meta as any).derivedExprs[0].fieldName).toBe("likeCount");
+		expect((Picked._meta as any).derivedFields).toEqual(["likeCount"]);
+	});
+
+	test("pick then derive works", () => {
+		const Picked = Posts.pick("id");
+		const WithCount = Picked.derive("likeCount", z.number())`COUNT(*)`;
+
+		expect((WithCount._meta as any).isPartial).toBe(true);
+		expect((WithCount._meta as any).isDerived).toBe(true);
+		expect(Object.keys(WithCount.schema.shape)).toEqual(["id", "likeCount"]);
+	});
 });
 
 describe("Table.cols", () => {
