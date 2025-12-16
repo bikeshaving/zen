@@ -68,8 +68,14 @@ export const db = {
 /**
  * Separate DB expressions from regular data values.
  * DB expressions skip validation and encoding - they're raw SQL.
+ *
+ * @param data - User-provided data
+ * @param table - Optional table to validate DB expressions aren't used with encoded fields
  */
-function extractDBExpressions(data: Record<string, unknown>): {
+function extractDBExpressions(
+	data: Record<string, unknown>,
+	table?: Table<any>,
+): {
 	regularData: Record<string, unknown>;
 	expressions: Record<string, DBExpression>;
 } {
@@ -78,6 +84,16 @@ function extractDBExpressions(data: Record<string, unknown>): {
 
 	for (const [key, value] of Object.entries(data)) {
 		if (isDBExpression(value)) {
+			// Validate: DB expressions cannot be used with encoded/decoded fields
+			if (table) {
+				const fieldMeta = table._meta.fields[key];
+				if (fieldMeta?.encode || fieldMeta?.decode) {
+					throw new Error(
+						`Cannot use DB expression for field "${key}" which has encode/decode. ` +
+						`DB expressions bypass encoding and are sent directly to the database.`,
+					);
+				}
+			}
 			expressions[key] = value;
 		} else {
 			regularData[key] = value;
@@ -112,14 +128,29 @@ function injectSchemaExpressions<T extends Table<any>>(
 
 		if (operation === "insert") {
 			// On insert: apply both inserted() and updated() expressions
-			if (dbMeta.inserted && isDBExpression(dbMeta.inserted)) {
+			if (dbMeta.inserted) {
+				if (!isDBExpression(dbMeta.inserted)) {
+					throw new Error(
+						`Field "${fieldName}" has invalid inserted() value. Expected a DB expression (e.g., db.now()).`,
+					);
+				}
 				result[fieldName] = dbMeta.inserted;
-			} else if (dbMeta.updated && isDBExpression(dbMeta.updated)) {
+			} else if (dbMeta.updated) {
+				if (!isDBExpression(dbMeta.updated)) {
+					throw new Error(
+						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
+					);
+				}
 				result[fieldName] = dbMeta.updated;
 			}
 		} else {
 			// On update: only apply updated() expressions
-			if (dbMeta.updated && isDBExpression(dbMeta.updated)) {
+			if (dbMeta.updated) {
+				if (!isDBExpression(dbMeta.updated)) {
+					throw new Error(
+						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
+					);
+				}
 				result[fieldName] = dbMeta.updated;
 			}
 		}
@@ -511,14 +542,73 @@ export class Transaction {
 			);
 		}
 
+		// Inject schema-defined expressions (inserted/updated) for fields not provided
+		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
+
+		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+
+		// Validate and encode only regular data
+		let schema = table.schema;
+		if (Object.keys(expressions).length > 0) {
+			const exprFields = Object.keys(expressions).reduce(
+				(acc, key) => {
+					acc[key] = (table.schema.shape as any)[key].optional();
+					return acc;
+				},
+				{} as Record<string, z.ZodTypeAny>,
+			);
+			schema = table.schema.extend(exprFields);
+		}
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
-			table.schema,
-			data,
+			schema,
+			regularData,
 		);
 		const encoded = encodeData(table, validated);
-		const row = await this.#driver.insert(table.name, encoded);
-		const decoded = decodeData(table, row);
-		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+
+		// Build SQL with expressions
+		const allColumns = [...Object.keys(encoded), ...Object.keys(expressions)];
+		const tableName = this.#quoteIdent(table.name);
+		const columnList = allColumns.map((c) => this.#quoteIdent(c)).join(", ");
+
+		const values: unknown[] = [];
+		const valueParts: string[] = [];
+		let paramIndex = 1;
+
+		for (const col of Object.keys(encoded)) {
+			valueParts.push(this.#placeholder(paramIndex++));
+			values.push(encoded[col]);
+		}
+
+		for (const col of Object.keys(expressions)) {
+			valueParts.push(expressions[col].sql);
+		}
+
+		const valuesClause = valueParts.join(", ");
+
+		if (this.#driver.dialect !== "mysql") {
+			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+		}
+
+		// MySQL fallback
+		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause})`;
+		await this.#driver.run(sql, values);
+
+		const pk = table._meta.primary;
+		const pkValue = encoded[pk] ?? (expressions[pk] ? undefined : null);
+		if (pk && pkValue !== undefined && pkValue !== null) {
+			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
+			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
+			if (row) {
+				const decoded = decodeData(table, row);
+				return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			}
+		}
+
+		return validated as Infer<T>;
 	}
 
 	async update<T extends Table<any>>(
@@ -531,19 +621,58 @@ export class Transaction {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
+		// Inject schema-defined expressions (updated) for fields not provided
+		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "update");
+
+		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+
+		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			partialSchema,
-			data,
+			regularData,
 		);
 
-		const columns = Object.keys(validated);
-		if (columns.length === 0) {
+		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
 
 		const encoded = encodeData(table, validated);
-		const row = await this.#driver.update(table.name, pk, id, encoded);
+		const tableName = this.#quoteIdent(table.name);
+
+		// Build SET clause
+		const values: unknown[] = [];
+		const setParts: string[] = [];
+		let paramIndex = 1;
+
+		for (const col of Object.keys(encoded)) {
+			setParts.push(`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`);
+			values.push(encoded[col]);
+		}
+
+		for (const col of Object.keys(expressions)) {
+			setParts.push(`${this.#quoteIdent(col)} = ${expressions[col].sql}`);
+		}
+
+		const setClause = setParts.join(", ");
+		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(paramIndex)}`;
+
+		if (this.#driver.dialect !== "mysql") {
+			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			if (!row) return null;
+			const decoded = decodeData(table, row);
+			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+		}
+
+		// MySQL fallback
+		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
+		await this.#driver.run(sql, [...values, id]);
+
+		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
 		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
@@ -583,10 +712,24 @@ export class Transaction {
 			);
 		}
 
+		// Inject updated() markers (soft delete is an update operation)
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		// Build SET clause: softDelete field + any updated() expressions
+		const setClauses: string[] = [
+			`${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			// Don't double-set the softDelete field if it has an updated() marker
+			if (field !== softDeleteField) {
+				setClauses.push(`${this.#quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
 		const tableName = this.#quoteIdent(table.name);
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-		// Use CURRENT_TIMESTAMP for consistent DB server time (not app server time)
-		const setClause = `${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`;
+		const setClause = setClauses.join(", ");
 
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
 		const affected = await this.#driver.run(sql, [id]);
@@ -932,8 +1075,8 @@ export class Database extends EventTarget {
 		// Inject schema-defined expressions (inserted/updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
 
-		// Separate DB expressions from regular data
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs);
+		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
 
 		// Validate and encode only regular data
 		// DB expression fields are excluded from validation since they're handled by the DB
@@ -1026,8 +1169,8 @@ export class Database extends EventTarget {
 		// Inject schema-defined expressions (updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "update");
 
-		// Separate DB expressions from regular data
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs);
+		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
+		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
 
 		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
@@ -1113,7 +1256,7 @@ export class Database extends EventTarget {
 	 * Soft delete by marking the soft delete field (e.g., deletedAt) with the current timestamp.
 	 *
 	 * @example
-	 * const deleted = await db.softDelete(Users, userId);
+	 * const deleted = await tx.softDelete(Users, userId);
 	 */
 	async softDelete<T extends Table<any>>(
 		table: T,
@@ -1131,10 +1274,24 @@ export class Database extends EventTarget {
 			);
 		}
 
+		// Inject updated() markers (soft delete is an update operation)
+		const schemaExprs = injectSchemaExpressions(table, {}, "update");
+		const {expressions} = extractDBExpressions(schemaExprs);
+
+		// Build SET clause: softDelete field + any updated() expressions
+		const setClauses: string[] = [
+			`${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
+		];
+		for (const [field, expr] of Object.entries(expressions)) {
+			// Don't double-set the softDelete field if it has an updated() marker
+			if (field !== softDeleteField) {
+				setClauses.push(`${this.#quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+
 		const tableName = this.#quoteIdent(table.name);
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-		// Use CURRENT_TIMESTAMP for consistent DB server time (not app server time)
-		const setClause = `${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`;
+		const setClause = setClauses.join(", ");
 
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
 		const affected = await this.#driver.run(sql, [id]);

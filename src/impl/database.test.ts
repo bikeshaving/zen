@@ -292,6 +292,38 @@ describe("Database", () => {
 		expect(capturedValues[1]).toBe("a,b,c");
 	});
 
+	test("throws when using DB expression on field with encode", async () => {
+		const {db: dbHelpers} = require("./database.js");
+
+		const EncodedField = table("encoded", {
+			id: z.string().db.primary(),
+			value: z.string().db.encode((v) => v.toUpperCase()),
+		});
+
+		await expect(
+			db.insert(EncodedField, {
+				id: "1",
+				value: dbHelpers.now() as any, // Try to pass DB expression
+			}),
+		).rejects.toThrow('Cannot use DB expression for field "value" which has encode/decode');
+	});
+
+	test("throws when using DB expression on field with decode", async () => {
+		const {db: dbHelpers} = require("./database.js");
+
+		const DecodedField = table("decoded", {
+			id: z.string().db.primary(),
+			value: z.string().db.decode((v) => v.toLowerCase()),
+		});
+
+		await expect(
+			db.insert(DecodedField, {
+				id: "1",
+				value: dbHelpers.now() as any, // Try to pass DB expression
+			}),
+		).rejects.toThrow('Cannot use DB expression for field "value" which has encode/decode');
+	});
+
 	});
 
 	describe("read path JSON decoding", () => {
@@ -643,10 +675,12 @@ describe("escapeIdentifier", () => {
 describe("transaction()", () => {
 	test("commits on success", async () => {
 		const driver = createMockDriver();
-		// Mock insert result
-		(driver.insert as any).mockImplementation(
-			async (_tableName: string, data: any) => data,
-		);
+		// Mock get result for INSERT ... RETURNING
+		(driver.get as any).mockImplementation(async () => ({
+			id: USER_ID,
+			email: "alice@example.com",
+			name: "Alice",
+		}));
 		const db = new Database(driver);
 
 		const result = await db.transaction(async (tx) => {
@@ -662,16 +696,18 @@ describe("transaction()", () => {
 		// Check driver.transaction was called
 		expect((driver.transaction as any).mock.calls.length).toBe(1);
 
-		// Check INSERT was called via driver.insert
-		expect((driver.insert as any).mock.calls.length).toBe(1);
+		// Check INSERT SQL was executed via driver.get (RETURNING)
+		expect((driver.get as any).mock.calls.length).toBeGreaterThan(0);
 	});
 
 	test("rollbacks on error", async () => {
 		const driver = createMockDriver();
-		// Mock insert result
-		(driver.insert as any).mockImplementation(
-			async (_tableName: string, data: any) => data,
-		);
+		// Mock get result for INSERT ... RETURNING
+		(driver.get as any).mockImplementation(async () => ({
+			id: USER_ID,
+			email: "alice@example.com",
+			name: "Alice",
+		}));
 		const db = new Database(driver);
 
 		const error = new Error("Test error");
@@ -698,6 +734,50 @@ describe("transaction()", () => {
 		});
 
 		expect(result).toEqual({id: USER_ID, name: "Alice"});
+	});
+
+	test("applies schema markers (inserted/updated) in transaction", async () => {
+		const {db: dbHelpers} = require("./database.js");
+
+		const AutoTable = table("auto_tx", {
+			id: z.string().db.primary(),
+			name: z.string(),
+			createdAt: z.date().db.inserted(dbHelpers.now()),
+			updatedAt: z.date().db.updated(dbHelpers.now()),
+		});
+
+		const driver = createMockDriver();
+		(driver.get as any).mockImplementation(async () => ({
+			id: "123",
+			name: "Test",
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		}));
+		const database = new Database(driver);
+
+		await database.transaction(async (tx) => {
+			// Insert without providing timestamps
+			await tx.insert(AutoTable, {
+				id: "123",
+				name: "Test",
+			});
+
+			// Check SQL contains CURRENT_TIMESTAMP for both fields
+			const insertSql = (driver.get as any).mock.calls[0][0];
+			expect(insertSql).toContain("CURRENT_TIMESTAMP");
+			expect(insertSql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(2);
+
+			// Update without providing updatedAt
+			(driver.get as any).mockClear();
+			await tx.update(AutoTable, "123", {
+				name: "Updated",
+			});
+
+			// Check SQL contains CURRENT_TIMESTAMP for updatedAt
+			const updateSql = (driver.get as any).mock.calls[0][0];
+			expect(updateSql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
+			expect(updateSql).not.toContain('"createdAt"');
+		});
 	});
 });
 
@@ -818,6 +898,26 @@ describe("Soft Delete", () => {
 				'Table normal does not have a soft delete field',
 			);
 		});
+
+		test("applies updated() markers on soft delete", async () => {
+			const {db: dbHelpers} = require("./database.js");
+
+			const SoftDeleteWithUpdatedAt = table("soft_with_updated", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				updatedAt: z.date().db.updated(dbHelpers.now()),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			(driver.run as any).mockImplementation(async () => 1);
+
+			await db.softDelete(SoftDeleteWithUpdatedAt, "123");
+
+			const [sql] = (driver.run as any).mock.calls[0];
+			// Should set both deletedAt and updatedAt
+			expect(sql).toContain('"deletedAt" = CURRENT_TIMESTAMP');
+			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
+		});
 	});
 
 	describe("Transaction.softDelete()", () => {
@@ -858,6 +958,30 @@ describe("Soft Delete", () => {
 					await tx.softDelete(NormalTable, "123");
 				}),
 			).rejects.toThrow('Table normal does not have a soft delete field');
+		});
+
+		test("applies updated() markers on soft delete", async () => {
+			const {db: dbHelpers} = require("./database.js");
+
+			const SoftDeleteWithUpdatedAt = table("soft_with_updated", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				updatedAt: z.date().db.updated(dbHelpers.now()),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const driver = createMockDriver();
+			const database = new Database(driver);
+			(driver.run as any).mockImplementation(async () => 1);
+
+			await database.transaction(async (tx) => {
+				await tx.softDelete(SoftDeleteWithUpdatedAt, "123");
+			});
+
+			const [sql] = (driver.run as any).mock.calls[0];
+			// Should set both deletedAt and updatedAt
+			expect(sql).toContain('"deletedAt" = CURRENT_TIMESTAMP');
+			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 		});
 	});
 

@@ -257,6 +257,14 @@ function createDbMethods(schema: ZodTypeAny) {
 			 *   .db.decode(i => statusMap[i])
 			 */
 			encode<TDB>(encodeFn: (app: any) => TDB) {
+				// Validate: encode cannot be combined with inserted/updated
+				const existing = getDBMeta(schema);
+				if (existing.inserted || existing.updated) {
+					throw new TableDefinitionError(
+						`encode() cannot be combined with inserted() or updated(). ` +
+						`DB expressions bypass encoding and are sent directly to the database.`,
+					);
+				}
 				return setDBMeta(schema, {encode: encodeFn});
 			},
 
@@ -268,6 +276,14 @@ function createDbMethods(schema: ZodTypeAny) {
 			 * legacy: z.string().db.decode(deserializeLegacyFormat)
 			 */
 			decode<TApp>(decodeFn: (db: any) => TApp) {
+				// Validate: decode cannot be combined with inserted/updated
+				const existing = getDBMeta(schema);
+				if (existing.inserted || existing.updated) {
+					throw new TableDefinitionError(
+						`decode() cannot be combined with inserted() or updated(). ` +
+						`DB expressions bypass decoding and are sent directly to the database.`,
+					);
+				}
 				return setDBMeta(schema, {decode: decodeFn});
 			},
 
@@ -295,6 +311,26 @@ function createDbMethods(schema: ZodTypeAny) {
 			 * createdAt: z.date().db.inserted(db.now())
 			 */
 			inserted(expr: unknown) {
+				// Validate at definition time that this is a DBExpression
+				const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+				if (
+					expr === null ||
+					typeof expr !== "object" ||
+					!(DB_EXPR in expr) ||
+					(expr as any)[DB_EXPR] !== true
+				) {
+					throw new TableDefinitionError(
+						`inserted() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+					);
+				}
+				// Validate: inserted cannot be combined with encode/decode
+				const existing = getDBMeta(schema);
+				if (existing.encode || existing.decode) {
+					throw new TableDefinitionError(
+						`inserted() cannot be combined with encode() or decode(). ` +
+						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
+					);
+				}
 				return setDBMeta(schema, {inserted: expr});
 			},
 
@@ -306,6 +342,26 @@ function createDbMethods(schema: ZodTypeAny) {
 			 * updatedAt: z.date().db.updated(db.now())
 			 */
 			updated(expr: unknown) {
+				// Validate at definition time that this is a DBExpression
+				const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+				if (
+					expr === null ||
+					typeof expr !== "object" ||
+					!(DB_EXPR in expr) ||
+					(expr as any)[DB_EXPR] !== true
+				) {
+					throw new TableDefinitionError(
+						`updated() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+					);
+				}
+				// Validate: updated cannot be combined with encode/decode
+				const existing = getDBMeta(schema);
+				if (existing.encode || existing.decode) {
+					throw new TableDefinitionError(
+						`updated() cannot be combined with encode() or decode(). ` +
+						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
+					);
+				}
 				return setDBMeta(schema, {updated: expr});
 			},
 		};

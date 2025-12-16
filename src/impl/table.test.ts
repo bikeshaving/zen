@@ -354,3 +354,117 @@ describe("Table.cols", () => {
 		expect(result.params).toEqual(["user-123"]);
 	});
 });
+
+describe("Schema marker validation", () => {
+	test("inserted() throws for non-DBExpression values", () => {
+		expect(() =>
+			z.date().db.inserted("invalid"),
+		).toThrow("inserted() requires a DB expression");
+
+		expect(() =>
+			z.date().db.inserted(new Date()),
+		).toThrow("inserted() requires a DB expression");
+
+		expect(() =>
+			z.date().db.inserted(null),
+		).toThrow("inserted() requires a DB expression");
+
+		expect(() =>
+			z.date().db.inserted(123),
+		).toThrow("inserted() requires a DB expression");
+	});
+
+	test("updated() throws for non-DBExpression values", () => {
+		expect(() =>
+			z.date().db.updated("invalid"),
+		).toThrow("updated() requires a DB expression");
+
+		expect(() =>
+			z.date().db.updated(new Date()),
+		).toThrow("updated() requires a DB expression");
+
+		expect(() =>
+			z.date().db.updated(undefined),
+		).toThrow("updated() requires a DB expression");
+	});
+
+	test("inserted() accepts valid DBExpression", () => {
+		const {db} = require("./database.js");
+
+		// Should not throw
+		const schema = z.date().db.inserted(db.now());
+		expect(schema).toBeDefined();
+	});
+
+	test("updated() accepts valid DBExpression", () => {
+		const {db} = require("./database.js");
+
+		// Should not throw
+		const schema = z.date().db.updated(db.now());
+		expect(schema).toBeDefined();
+	});
+
+	test("encode() throws when combined with inserted()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.inserted(db.now()).db.encode(() => "encoded"),
+		).toThrow("encode() cannot be combined with inserted() or updated()");
+	});
+
+	test("encode() throws when combined with updated()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.updated(db.now()).db.encode(() => "encoded"),
+		).toThrow("encode() cannot be combined with inserted() or updated()");
+	});
+
+	test("decode() throws when combined with inserted()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.inserted(db.now()).db.decode(() => new Date()),
+		).toThrow("decode() cannot be combined with inserted() or updated()");
+	});
+
+	test("decode() throws when combined with updated()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.updated(db.now()).db.decode(() => new Date()),
+		).toThrow("decode() cannot be combined with inserted() or updated()");
+	});
+
+	test("inserted() throws when combined with encode()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.encode(() => "encoded").db.inserted(db.now()),
+		).toThrow("inserted() cannot be combined with encode() or decode()");
+	});
+
+	test("inserted() throws when combined with decode()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.decode(() => new Date()).db.inserted(db.now()),
+		).toThrow("inserted() cannot be combined with encode() or decode()");
+	});
+
+	test("updated() throws when combined with encode()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.encode(() => "encoded").db.updated(db.now()),
+		).toThrow("updated() cannot be combined with encode() or decode()");
+	});
+
+	test("updated() throws when combined with decode()", () => {
+		const {db} = require("./database.js");
+
+		expect(() =>
+			z.date().db.decode(() => new Date()).db.updated(db.now()),
+		).toThrow("updated() cannot be combined with encode() or decode()");
+	});
+});
