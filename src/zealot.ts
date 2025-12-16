@@ -13,6 +13,7 @@ export {
 	type PartialTable,
 	type TableOptions,
 	type ReferenceInfo,
+	type CompoundReference,
 
 	// Zod extension
 	extendZod,

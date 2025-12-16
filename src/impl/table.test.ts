@@ -123,6 +123,55 @@ describe("table", () => {
 		expect(posts.indexes).toEqual([["authorId", "createdAt"]]);
 	});
 
+	test("compound unique constraints via options", () => {
+		const posts = table(
+			"posts",
+			{
+				id: z.string().uuid().db.primary(),
+				authorId: z.string().uuid(),
+				slug: z.string()},
+			{
+				unique: [["authorId", "slug"]]},
+		);
+
+		expect(posts.unique).toEqual([["authorId", "slug"]]);
+	});
+
+	test("compound foreign keys via options", () => {
+		const Orders = table("orders", {
+			id: z.string().uuid().db.primary(),
+			customerId: z.string().uuid()});
+
+		const Products = table("products", {
+			id: z.string().uuid().db.primary(),
+			name: z.string()});
+
+		const OrderProducts = table("order_products", {
+			orderId: z.string().uuid(),
+			productId: z.string().uuid(),
+			quantity: z.number()});
+
+		const OrderItems = table(
+			"order_items",
+			{
+				id: z.string().uuid().db.primary(),
+				orderId: z.string().uuid(),
+				productId: z.string().uuid(),
+				price: z.number()},
+			{
+				references: [{
+					fields: ["orderId", "productId"],
+					table: OrderProducts,
+					as: "orderProduct",
+				}]},
+		);
+
+		expect(OrderItems.compoundReferences).toHaveLength(1);
+		expect(OrderItems.compoundReferences[0].fields).toEqual(["orderId", "productId"]);
+		expect(OrderItems.compoundReferences[0].table).toBe(OrderProducts);
+		expect(OrderItems.compoundReferences[0].as).toBe("orderProduct");
+	});
+
 	test("extracts Zod 4 .meta() for UI metadata", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
@@ -297,6 +346,46 @@ describe("Table.pick()", () => {
 
 		expect(Object.keys(Step2.schema.shape)).toEqual(["id", "name"]);
 		expect(Step2._meta.primary).toBe("id");
+	});
+
+	test("pick() preserves compound unique constraints if all fields picked", () => {
+		const Articles = table(
+			"articles",
+			{
+				id: z.string().uuid().db.primary(),
+				authorId: z.string().uuid(),
+				slug: z.string(),
+				title: z.string()},
+			{unique: [["authorId", "slug"]]},
+		);
+
+		const WithUnique = Articles.pick("id", "authorId", "slug");
+		expect(WithUnique.unique).toEqual([["authorId", "slug"]]);
+
+		const WithoutUnique = Articles.pick("id", "authorId", "title");
+		expect(WithoutUnique.unique).toEqual([]);
+	});
+
+	test("pick() preserves compound references if all fields picked", () => {
+		const RefTable = table("ref", {
+			a: z.string(),
+			b: z.string()});
+
+		const WithRefs = table(
+			"with_refs",
+			{
+				id: z.string().db.primary(),
+				refA: z.string(),
+				refB: z.string(),
+				other: z.string()},
+			{references: [{fields: ["refA", "refB"], table: RefTable, as: "ref"}]},
+		);
+
+		const Picked = WithRefs.pick("id", "refA", "refB");
+		expect(Picked.compoundReferences).toHaveLength(1);
+
+		const PickedPartial = WithRefs.pick("id", "refA", "other");
+		expect(PickedPartial.compoundReferences).toHaveLength(0);
 	});
 });
 

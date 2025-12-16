@@ -385,4 +385,151 @@ describe("DDL generation", () => {
 		expect(pgDdl).toContain('"binary" BYTEA');
 		expect(sqliteDdl).toContain('"binary" BYTEA');
 	});
+
+	test("compound unique constraint", () => {
+		const posts = table(
+			"posts",
+			{
+				id: z.string().uuid().db.primary(),
+				authorId: z.string().uuid(),
+				slug: z.string(),
+				title: z.string()},
+			{unique: [["authorId", "slug"]]},
+		);
+
+		const ddl = generateDDL(posts, {dialect: "sqlite"});
+
+		expect(ddl).toContain('UNIQUE ("authorId", "slug")');
+	});
+
+	test("multiple compound unique constraints", () => {
+		const items = table(
+			"items",
+			{
+				id: z.string().uuid().db.primary(),
+				a: z.string(),
+				b: z.string(),
+				c: z.string()},
+			{unique: [["a", "b"], ["b", "c"]]},
+		);
+
+		const ddl = generateDDL(items, {dialect: "sqlite"});
+
+		expect(ddl).toContain('UNIQUE ("a", "b")');
+		expect(ddl).toContain('UNIQUE ("b", "c")');
+	});
+
+	test("compound foreign key", () => {
+		const orderProducts = table("order_products", {
+			orderId: z.string().uuid(),
+			productId: z.string().uuid(),
+			quantity: z.number().int()});
+
+		const orderItems = table(
+			"order_items",
+			{
+				id: z.string().uuid().db.primary(),
+				orderId: z.string().uuid(),
+				productId: z.string().uuid(),
+				price: z.number()},
+			{
+				references: [{
+					fields: ["orderId", "productId"],
+					table: orderProducts,
+					as: "orderProduct",
+				}]},
+		);
+
+		const ddl = generateDDL(orderItems, {dialect: "sqlite"});
+
+		expect(ddl).toContain(
+			'FOREIGN KEY ("orderId", "productId") REFERENCES "order_products"("orderId", "productId")',
+		);
+	});
+
+	test("compound foreign key with custom referenced fields", () => {
+		const refTable = table("ref_table", {
+			keyA: z.string(),
+			keyB: z.string(),
+			data: z.string()});
+
+		const childTable = table(
+			"child_table",
+			{
+				id: z.string().uuid().db.primary(),
+				fkA: z.string(),
+				fkB: z.string()},
+			{
+				references: [{
+					fields: ["fkA", "fkB"],
+					table: refTable,
+					referencedFields: ["keyA", "keyB"],
+					as: "ref",
+				}]},
+		);
+
+		const ddl = generateDDL(childTable, {dialect: "sqlite"});
+
+		expect(ddl).toContain(
+			'FOREIGN KEY ("fkA", "fkB") REFERENCES "ref_table"("keyA", "keyB")',
+		);
+	});
+
+	test("compound foreign key with onDelete", () => {
+		const parent = table("parent", {
+			a: z.string(),
+			b: z.string()});
+
+		const child = table(
+			"child",
+			{
+				id: z.string().uuid().db.primary(),
+				parentA: z.string(),
+				parentB: z.string()},
+			{
+				references: [{
+					fields: ["parentA", "parentB"],
+					table: parent,
+					referencedFields: ["a", "b"],
+					as: "parent",
+					onDelete: "cascade",
+				}]},
+		);
+
+		const ddl = generateDDL(child, {dialect: "sqlite"});
+
+		expect(ddl).toContain(
+			'FOREIGN KEY ("parentA", "parentB") REFERENCES "parent"("a", "b") ON DELETE CASCADE',
+		);
+	});
+
+	test("compound constraints in mysql dialect", () => {
+		const parent = table("parent", {
+			a: z.string(),
+			b: z.string()});
+
+		const child = table(
+			"child",
+			{
+				id: z.string().uuid().db.primary(),
+				parentA: z.string(),
+				parentB: z.string(),
+				code: z.string()},
+			{
+				unique: [["parentA", "code"]],
+				references: [{
+					fields: ["parentA", "parentB"],
+					table: parent,
+					referencedFields: ["a", "b"],
+					as: "parent",
+				}]},
+		);
+
+		const ddl = generateDDL(child, {dialect: "mysql"});
+
+		expect(ddl).toContain("UNIQUE (`parentA`, `code`)");
+		expect(ddl).toContain(
+			"FOREIGN KEY (`parentA`, `parentB`) REFERENCES `parent`(`a`, `b`)",
+		);
+	});
 });

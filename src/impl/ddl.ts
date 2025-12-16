@@ -312,7 +312,7 @@ export function generateDDL<T extends Table<any>>(
 		columnDefs.push(`PRIMARY KEY (${quoteIdent(meta.primary, dialect)})`);
 	}
 
-	// FOREIGN KEY constraints
+	// FOREIGN KEY constraints (single-field)
 	for (const ref of meta.references) {
 		const fkColumn = quoteIdent(ref.fieldName, dialect);
 		const refTable = quoteIdent(ref.table.name, dialect);
@@ -328,6 +328,31 @@ export function generateDDL<T extends Table<any>>(
 		}
 
 		columnDefs.push(fk);
+	}
+
+	// Compound FOREIGN KEY constraints
+	for (const ref of table.compoundReferences) {
+		const fkColumns = ref.fields.map((f) => quoteIdent(f, dialect)).join(", ");
+		const refTable = quoteIdent(ref.table.name, dialect);
+		// Use referencedFields if provided, otherwise use the same field names
+		const refFields = ref.referencedFields ?? ref.fields;
+		const refColumns = refFields.map((f) => quoteIdent(f, dialect)).join(", ");
+
+		let fk = `FOREIGN KEY (${fkColumns}) REFERENCES ${refTable}(${refColumns})`;
+
+		if (ref.onDelete) {
+			const onDeleteSQL =
+				ref.onDelete === "set null" ? "SET NULL" : ref.onDelete.toUpperCase();
+			fk += ` ON DELETE ${onDeleteSQL}`;
+		}
+
+		columnDefs.push(fk);
+	}
+
+	// Compound UNIQUE constraints
+	for (const uniqueCols of table.unique) {
+		const cols = uniqueCols.map((c) => quoteIdent(c, dialect)).join(", ");
+		columnDefs.push(`UNIQUE (${cols})`);
 	}
 
 	// Build CREATE TABLE

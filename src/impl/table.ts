@@ -461,8 +461,29 @@ export interface FieldMeta {
 // Table
 // ============================================================================
 
+/**
+ * Compound foreign key reference defined at the table level.
+ */
+export interface CompoundReference {
+	/** Local field names that form the foreign key */
+	fields: string[];
+	/** Referenced table */
+	table: Table<any>;
+	/** Referenced field names (must match fields length, defaults to referenced table's fields) */
+	referencedFields?: string[];
+	/** Property name for the resolved reference */
+	as: string;
+	/** Delete behavior */
+	onDelete?: "cascade" | "set null" | "restrict";
+}
+
 export interface TableOptions {
+	/** Compound indexes */
 	indexes?: string[][];
+	/** Compound unique constraints */
+	unique?: string[][];
+	/** Compound foreign key references */
+	references?: CompoundReference[];
 	/**
 	 * Derived views - client-side transformations of already-fetched data.
 	 *
@@ -576,6 +597,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly name: string;
 	readonly schema: ZodObject<T>;
 	readonly indexes: string[][];
+	readonly unique: string[][];
+	readonly compoundReferences: CompoundReference[];
 
 	// Pre-extracted metadata (no Zod walking needed)
 	readonly _meta: {
@@ -1169,6 +1192,8 @@ function createTableObject(
 		name,
 		schema,
 		indexes: options.indexes ?? [],
+		unique: options.unique ?? [],
+		compoundReferences: options.references ?? [],
 		_meta: {...meta, derive: options.derive},
 		cols,
 		primary,
@@ -1261,12 +1286,22 @@ function createTableObject(
 				idx.every((f) => fieldSet.has(f)),
 			);
 
+			// Filter unique constraints to only those with all fields present
+			const pickedUnique = (options.unique ?? []).filter((u) =>
+				u.every((f) => fieldSet.has(f)),
+			);
+
+			// Filter compound references to only those with all fields present
+			const pickedCompoundRefs = (options.references ?? []).filter((ref) =>
+				ref.fields.every((f) => fieldSet.has(f)),
+			);
+
 			return createTableObject(
 				name,
 				pickedSchema,
 				pickedZodShape,
 				pickedMeta,
-				{indexes: pickedIndexes},  // Don't inherit derive - partial tables shouldn't have derived fields
+				{indexes: pickedIndexes, unique: pickedUnique, references: pickedCompoundRefs},
 			) as PartialTable<any>;
 		},
 
