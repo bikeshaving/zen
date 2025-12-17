@@ -402,6 +402,13 @@ function createDbMethods(schema: ZodTypeAny) {
 		 *
 		 * Field becomes optional for insert.
 		 *
+		 * **Note:** SQL expressions (tagged templates and symbols) bypass encode/decode
+		 * since they're executed by the database, not the application. Use function
+		 * form if you need encoding applied.
+		 *
+		 * **Note:** Interpolated values in tagged templates are parameterized but not
+		 * schema-validated. Ensure values are appropriate for the column type.
+		 *
 		 * @example
 		 * createdAt: z.date().db.inserted(NOW)
 		 * token: z.string().db.inserted(() => crypto.randomUUID())
@@ -460,15 +467,16 @@ function createDbMethods(schema: ZodTypeAny) {
 				);
 			}
 
-			// Make schema optional for input type
+			// Make schema optional for input type, preserving existing db metadata
 			const optionalSchema = schema.optional();
-			return setDBMeta(optionalSchema, {inserted: insertedMeta});
+			return setDBMeta(optionalSchema, {...existing, inserted: insertedMeta});
 		},
 
 		/**
 		 * Set a value to apply on UPDATE only.
 		 *
-		 * Same forms as inserted().
+		 * Same forms as inserted(). See inserted() for notes on codec bypass
+		 * and template parameter validation.
 		 *
 		 * Field becomes optional for update operations.
 		 *
@@ -529,15 +537,16 @@ function createDbMethods(schema: ZodTypeAny) {
 				);
 			}
 
-			// Make schema optional for input type
+			// Make schema optional for input type, preserving existing db metadata
 			const optionalSchema = schema.optional();
-			return setDBMeta(optionalSchema, {updated: updatedMeta});
+			return setDBMeta(optionalSchema, {...existing, updated: updatedMeta});
 		},
 
 		/**
 		 * Set a value to apply on both INSERT and UPDATE.
 		 *
-		 * Same forms as inserted().
+		 * Same forms as inserted(). See inserted() for notes on codec bypass
+		 * and template parameter validation.
 		 *
 		 * Field becomes optional for insert/update.
 		 *
@@ -598,9 +607,9 @@ function createDbMethods(schema: ZodTypeAny) {
 				);
 			}
 
-			// Make schema optional for input type
+			// Make schema optional for input type, preserving existing db metadata
 			const optionalSchema = schema.optional();
-			return setDBMeta(optionalSchema, {upserted: upsertedMeta});
+			return setDBMeta(optionalSchema, {...existing, upserted: upsertedMeta});
 		},
 
 		/**
@@ -610,12 +619,13 @@ function createDbMethods(schema: ZodTypeAny) {
 		 * Typically used for integer primary keys.
 		 *
 		 * @example
-		 * id: z.number().db.primary().autoIncrement()
+		 * id: z.number().db.primary().db.autoIncrement()
 		 */
 		autoIncrement() {
-			// Make schema optional for input type
+			// Preserve existing db metadata when wrapping with optional
+			const existing = getDBMeta(schema);
 			const optionalSchema = schema.optional();
-			return setDBMeta(optionalSchema, {autoIncrement: true});
+			return setDBMeta(optionalSchema, {...existing, autoIncrement: true});
 		},
 	};
 }
@@ -1319,6 +1329,9 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		}
 		if (fieldDbMeta.upserted) {
 			dbMeta.upserted = fieldDbMeta.upserted;
+		}
+		if (fieldDbMeta.autoIncrement) {
+			dbMeta.autoIncrement = fieldDbMeta.autoIncrement;
 		}
 
 		meta.fields[key] = dbMeta;
@@ -2087,6 +2100,13 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	 *
 	 * Field becomes optional for insert.
 	 *
+	 * **Note:** SQL expressions (tagged templates and symbols) bypass encode/decode
+	 * since they're executed by the database, not the application. Use function
+	 * form if you need encoding applied.
+	 *
+	 * **Note:** Interpolated values in tagged templates are parameterized but not
+	 * schema-validated. Ensure values are appropriate for the column type.
+	 *
 	 * @example
 	 * createdAt: z.date().db.inserted(NOW)
 	 * token: z.string().db.inserted(() => crypto.randomUUID())
@@ -2100,7 +2120,8 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	/**
 	 * Set a value to apply on UPDATE only.
 	 *
-	 * Same forms as inserted().
+	 * Same forms as inserted(). See inserted() for notes on codec bypass
+	 * and template parameter validation.
 	 *
 	 * Field becomes optional for update operations.
 	 *
@@ -2116,7 +2137,8 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	/**
 	 * Set a value to apply on both INSERT and UPDATE.
 	 *
-	 * Same forms as inserted().
+	 * Same forms as inserted(). See inserted() for notes on codec bypass
+	 * and template parameter validation.
 	 *
 	 * Field becomes optional for insert/update.
 	 *
@@ -2136,7 +2158,7 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	 * Typically used for integer primary keys.
 	 *
 	 * @example
-	 * id: z.number().db.primary().autoIncrement()
+	 * id: z.number().int().db.primary().db.autoIncrement()
 	 */
 	autoIncrement(): Schema;
 }

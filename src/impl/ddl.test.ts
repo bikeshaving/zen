@@ -593,4 +593,65 @@ describe("DDL generation", () => {
 			"FOREIGN KEY (`parentA`, `parentB`) REFERENCES `parent`(`a`, `b`)",
 		);
 	});
+
+	describe("autoIncrement", () => {
+		test("SQLite auto-increment primary key", () => {
+			const items = table("items", {
+				id: z.number().int().db.primary().db.autoIncrement(),
+				name: z.string(),
+			});
+
+			const ddl = generateDDL(items, {dialect: "sqlite"});
+
+			// SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT
+			expect(ddl).toContain('"id" INTEGER PRIMARY KEY AUTOINCREMENT');
+			// Should not have separate PRIMARY KEY constraint
+			expect(ddl).not.toContain('PRIMARY KEY ("id")');
+		});
+
+		test("PostgreSQL auto-increment with GENERATED ALWAYS AS IDENTITY", () => {
+			const items = table("items", {
+				id: z.number().int().db.primary().db.autoIncrement(),
+				name: z.string(),
+			});
+
+			const ddl = generateDDL(items, {dialect: "postgresql"});
+
+			// PostgreSQL uses GENERATED ALWAYS AS IDENTITY (SQL standard)
+			expect(ddl).toContain('"id" INTEGER GENERATED ALWAYS AS IDENTITY');
+			// Should still have PRIMARY KEY constraint
+			expect(ddl).toContain('PRIMARY KEY ("id")');
+		});
+
+		test("MySQL auto-increment", () => {
+			const items = table("items", {
+				id: z.number().int().db.primary().db.autoIncrement(),
+				name: z.string(),
+			});
+
+			const ddl = generateDDL(items, {dialect: "mysql"});
+
+			// MySQL uses AUTO_INCREMENT
+			expect(ddl).toContain("`id` INTEGER AUTO_INCREMENT");
+			// Should have PRIMARY KEY constraint
+			expect(ddl).toContain("PRIMARY KEY (`id`)");
+		});
+
+		test("auto-increment excludes NOT NULL and DEFAULT", () => {
+			const items = table("items", {
+				id: z.number().int().db.primary().db.autoIncrement(),
+				name: z.string(),
+			});
+
+			const sqliteDdl = generateDDL(items, {dialect: "sqlite"});
+			const pgDdl = generateDDL(items, {dialect: "postgresql"});
+
+			// Auto-increment columns should not have explicit NOT NULL (implicit)
+			expect(sqliteDdl).not.toContain('"id" INTEGER NOT NULL');
+			expect(pgDdl).not.toContain('"id" INTEGER NOT NULL');
+			// Should not have DEFAULT clause
+			expect(sqliteDdl).not.toContain("DEFAULT");
+			expect(pgDdl).not.toContain("DEFAULT");
+		});
+	});
 });

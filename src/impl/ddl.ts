@@ -25,6 +25,7 @@ interface ColumnDef {
 	nullable: boolean;
 	primaryKey: boolean;
 	unique: boolean;
+	autoIncrement: boolean;
 	defaultValue?: string;
 }
 
@@ -283,6 +284,7 @@ export function generateDDL<T extends Table<any>>(
 			nullable: isOptional || isNullable || hasDefault,
 			primaryKey: fieldMeta.primaryKey === true,
 			unique: fieldMeta.unique === true,
+			autoIncrement: fieldMeta.autoIncrement === true,
 			defaultValue: sqlDefault,
 		};
 
@@ -295,15 +297,33 @@ export function generateDDL<T extends Table<any>>(
 	for (const col of columns) {
 		let def = `${quoteIdent(col.name, dialect)} ${col.sqlType}`;
 
-		if (!col.nullable) {
+		// Handle auto-increment based on dialect
+		if (col.autoIncrement) {
+			if (dialect === "sqlite") {
+				// SQLite: INTEGER PRIMARY KEY is auto-increment by default
+				// Adding AUTOINCREMENT prevents rowid reuse (usually not needed)
+				def += " PRIMARY KEY AUTOINCREMENT";
+			} else if (dialect === "postgresql") {
+				// PostgreSQL: Use GENERATED ALWAYS AS IDENTITY (SQL standard, PG 10+)
+				def += " GENERATED ALWAYS AS IDENTITY";
+			} else if (dialect === "mysql") {
+				// MySQL: AUTO_INCREMENT (must be a key, handled with PRIMARY KEY below)
+				def += " AUTO_INCREMENT";
+			}
+		}
+
+		if (!col.nullable && !col.autoIncrement) {
+			// Auto-increment columns are implicitly NOT NULL
 			def += " NOT NULL";
 		}
 
-		if (col.defaultValue !== undefined) {
+		if (col.defaultValue !== undefined && !col.autoIncrement) {
+			// Auto-increment columns shouldn't have DEFAULT
 			def += ` DEFAULT ${col.defaultValue}`;
 		}
 
-		if (col.primaryKey && dialect === "sqlite") {
+		// SQLite primary key is inline (and already added for autoIncrement)
+		if (col.primaryKey && dialect === "sqlite" && !col.autoIncrement) {
 			def += " PRIMARY KEY";
 		}
 
