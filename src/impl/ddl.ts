@@ -7,55 +7,13 @@
 
 import {z} from "zod";
 import type {Table} from "./table.js";
-import {ident, isSQLIdentifier, makeTemplate} from "./template.js";
-
-// ============================================================================
-// Types
-// ============================================================================
+import {ident, makeTemplate} from "./template.js";
 
 export type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
 export interface DDLOptions {
 	dialect?: SQLDialect;
 	ifNotExists?: boolean;
-}
-
-// ============================================================================
-// DDL Rendering (internal)
-// ============================================================================
-
-/**
- * Quote an identifier based on dialect.
- */
-function quoteIdent(name: string, dialect: SQLDialect): string {
-	if (dialect === "mysql") {
-		return `\`${name.replace(/`/g, "``")}\``;
-	}
-	return `"${name.replace(/"/g, '""')}"`;
-}
-
-/**
- * Render a DDL template to a SQL string.
- * DDL templates only contain identifiers (no parameter placeholders).
- */
-function renderDDL(
-	strings: TemplateStringsArray,
-	values: readonly unknown[],
-	dialect: SQLDialect,
-): string {
-	let sql = "";
-	for (let i = 0; i < strings.length; i++) {
-		sql += strings[i];
-		if (i < values.length) {
-			const value = values[i];
-			if (isSQLIdentifier(value)) {
-				sql += quoteIdent(value.name, dialect);
-			} else {
-				throw new Error(`Unexpected value in DDL template: ${value}`);
-			}
-		}
-	}
-	return sql;
 }
 
 // ============================================================================
@@ -237,52 +195,10 @@ function mapZodToSQL(
 // ============================================================================
 
 /**
- * Generate a single column definition for ALTER TABLE ADD COLUMN.
+ * Generate a single column definition as a template with ident markers.
  * @internal Used by Table.ensureColumn()
  */
 export function generateColumnDDL(
-	fieldName: string,
-	zodType: z.ZodType,
-	fieldMeta: Record<string, any>,
-	dialect: SQLDialect = "sqlite",
-): string {
-	const template = generateColumnDDLTemplate(
-		fieldName,
-		zodType,
-		fieldMeta,
-		dialect,
-	);
-	return renderDDL(template.strings, template.values, dialect);
-}
-
-/**
- * Generate CREATE TABLE DDL from a table definition.
- */
-export function generateDDL<T extends Table<any>>(
-	table: T,
-	options: DDLOptions = {},
-): string {
-	const {dialect = "sqlite"} = options;
-	const template = generateDDLTemplate(table, options);
-	return renderDDL(template.strings, template.values, dialect);
-}
-
-/**
- * Convenience function for generating DDL.
- */
-export function ddl(table: Table<any>, dialect: SQLDialect = "sqlite"): string {
-	return generateDDL(table, {dialect});
-}
-
-// ============================================================================
-// Template-based DDL (defers quoting to drivers)
-// ============================================================================
-
-/**
- * Generate a single column definition as a template with ident markers.
- * @internal Used by transformDDLFragmentToTemplate
- */
-export function generateColumnDDLTemplate(
 	fieldName: string,
 	zodType: z.ZodType,
 	fieldMeta: Record<string, any>,
@@ -317,9 +233,9 @@ export function generateColumnDDLTemplate(
 
 /**
  * Generate CREATE TABLE DDL as a template with ident markers.
- * @internal Used by transformDDLFragmentToTemplate
+ * Pass to driver.run() to execute, or use renderDDL() in tests.
  */
-export function generateDDLTemplate<T extends Table<any>>(
+export function generateDDL<T extends Table<any>>(
 	table: T,
 	options: DDLOptions = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {

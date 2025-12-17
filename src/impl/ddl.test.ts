@@ -1,10 +1,20 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {generateDDL} from "./ddl.js";
+import {generateDDL, type SQLDialect} from "./ddl.js";
+import {renderDDL} from "./test-driver.js";
 
 // Extend Zod once before tests
 extendZod(z);
+
+// Helper to generate DDL string for tests
+function ddl(
+	tbl: ReturnType<typeof table>,
+	dialect: SQLDialect = "sqlite",
+): string {
+	const template = generateDDL(tbl, {dialect});
+	return renderDDL(template.strings, template.values, dialect);
+}
 
 describe("DDL generation", () => {
 	test("basic table", () => {
@@ -13,11 +23,11 @@ describe("DDL generation", () => {
 			name: z.string(),
 		});
 
-		const ddl = generateDDL(users, {dialect: "sqlite"});
+		const result = ddl(users, "sqlite");
 
-		expect(ddl).toContain('CREATE TABLE IF NOT EXISTS "users"');
-		expect(ddl).toContain('"id" TEXT NOT NULL PRIMARY KEY');
-		expect(ddl).toContain('"name" TEXT NOT NULL');
+		expect(result).toContain('CREATE TABLE IF NOT EXISTS "users"');
+		expect(result).toContain('"id" TEXT NOT NULL PRIMARY KEY');
+		expect(result).toContain('"name" TEXT NOT NULL');
 	});
 
 	test("primary key and unique", () => {
@@ -26,10 +36,10 @@ describe("DDL generation", () => {
 			email: z.string().email().db.unique(),
 		});
 
-		const ddl = generateDDL(users, {dialect: "sqlite"});
+		const result = ddl(users, "sqlite");
 
-		expect(ddl).toContain('"id" TEXT NOT NULL PRIMARY KEY');
-		expect(ddl).toContain('"email" TEXT NOT NULL UNIQUE');
+		expect(result).toContain('"id" TEXT NOT NULL PRIMARY KEY');
+		expect(result).toContain('"email" TEXT NOT NULL UNIQUE');
 	});
 
 	test("optional and nullable fields", () => {
@@ -39,13 +49,13 @@ describe("DDL generation", () => {
 			avatar: z.string().nullable(),
 		});
 
-		const ddl = generateDDL(profiles, {dialect: "sqlite"});
+		const result = ddl(profiles, "sqlite");
 
 		// Optional/nullable fields should not have NOT NULL
-		expect(ddl).toContain('"bio" TEXT');
-		expect(ddl).toContain('"avatar" TEXT');
-		expect(ddl).not.toContain('"bio" TEXT NOT NULL');
-		expect(ddl).not.toContain('"avatar" TEXT NOT NULL');
+		expect(result).toContain('"bio" TEXT');
+		expect(result).toContain('"avatar" TEXT');
+		expect(result).not.toContain('"bio" TEXT NOT NULL');
+		expect(result).not.toContain('"avatar" TEXT NOT NULL');
 	});
 
 	test("required fields", () => {
@@ -56,11 +66,11 @@ describe("DDL generation", () => {
 			score: z.number(),
 		});
 
-		const ddl = generateDDL(users, {dialect: "sqlite"});
+		const result = ddl(users, "sqlite");
 
-		expect(ddl).toContain('"role" TEXT NOT NULL');
-		expect(ddl).toContain('"active" INTEGER NOT NULL'); // SQLite boolean
-		expect(ddl).toContain('"score" REAL NOT NULL');
+		expect(result).toContain('"role" TEXT NOT NULL');
+		expect(result).toContain('"active" INTEGER NOT NULL'); // SQLite boolean
+		expect(result).toContain('"score" REAL NOT NULL');
 	});
 
 	test("integer vs real", () => {
@@ -70,10 +80,10 @@ describe("DDL generation", () => {
 			average: z.number(),
 		});
 
-		const ddl = generateDDL(stats, {dialect: "sqlite"});
+		const result = ddl(stats, "sqlite");
 
-		expect(ddl).toContain('"count" INTEGER');
-		expect(ddl).toContain('"average" REAL');
+		expect(result).toContain('"count" INTEGER');
+		expect(result).toContain('"average" REAL');
 	});
 
 	test("enum as text", () => {
@@ -82,9 +92,9 @@ describe("DDL generation", () => {
 			role: z.enum(["user", "admin", "moderator"]),
 		});
 
-		const ddl = generateDDL(users, {dialect: "sqlite"});
+		const result = ddl(users, "sqlite");
 
-		expect(ddl).toContain('"role" TEXT NOT NULL');
+		expect(result).toContain('"role" TEXT NOT NULL');
 	});
 
 	test("date field", () => {
@@ -93,9 +103,9 @@ describe("DDL generation", () => {
 			createdAt: z.date(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain('"createdAt" TEXT');
+		expect(result).toContain('"createdAt" TEXT');
 	});
 
 	test("indexed field", () => {
@@ -104,10 +114,10 @@ describe("DDL generation", () => {
 			authorId: z.string().uuid().db.index(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain('CREATE INDEX IF NOT EXISTS "idx_posts_authorId"');
-		expect(ddl).toContain('ON "posts" ("authorId")');
+		expect(result).toContain('CREATE INDEX IF NOT EXISTS "idx_posts_authorId"');
+		expect(result).toContain('ON "posts" ("authorId")');
 	});
 
 	test("compound indexes", () => {
@@ -123,12 +133,12 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'CREATE INDEX IF NOT EXISTS "idx_posts_authorId_createdAt"',
 		);
-		expect(ddl).toContain('("authorId", "createdAt")');
+		expect(result).toContain('("authorId", "createdAt")');
 	});
 
 	test("json fields", () => {
@@ -138,10 +148,10 @@ describe("DDL generation", () => {
 			tags: z.array(z.string()),
 		});
 
-		const ddl = generateDDL(users, {dialect: "sqlite"});
+		const result = ddl(users, "sqlite");
 
-		expect(ddl).toContain('"settings" TEXT');
-		expect(ddl).toContain('"tags" TEXT');
+		expect(result).toContain('"settings" TEXT');
+		expect(result).toContain('"tags" TEXT');
 	});
 
 	test("postgresql dialect", () => {
@@ -153,14 +163,14 @@ describe("DDL generation", () => {
 			settings: z.object({theme: z.string()}),
 		});
 
-		const ddl = generateDDL(users, {dialect: "postgresql"});
+		const result = ddl(users, "postgresql");
 
-		expect(ddl).toContain('"score" DOUBLE PRECISION');
-		expect(ddl).toContain('"active" BOOLEAN');
-		expect(ddl).toContain('"createdAt" TIMESTAMPTZ');
-		expect(ddl).toContain('"settings" JSONB');
+		expect(result).toContain('"score" DOUBLE PRECISION');
+		expect(result).toContain('"active" BOOLEAN');
+		expect(result).toContain('"createdAt" TIMESTAMPTZ');
+		expect(result).toContain('"settings" JSONB');
 		// PostgreSQL uses separate PRIMARY KEY constraint
-		expect(ddl).toContain('PRIMARY KEY ("id")');
+		expect(result).toContain('PRIMARY KEY ("id")');
 	});
 
 	test("mysql dialect", () => {
@@ -169,12 +179,12 @@ describe("DDL generation", () => {
 			name: z.string().max(100),
 		});
 
-		const ddl = generateDDL(users, {dialect: "mysql"});
+		const result = ddl(users, "mysql");
 
 		// MySQL uses backticks
-		expect(ddl).toContain("CREATE TABLE IF NOT EXISTS `users`");
-		expect(ddl).toContain("`id` TEXT");
-		expect(ddl).toContain("`name` VARCHAR(100)");
+		expect(result).toContain("CREATE TABLE IF NOT EXISTS `users`");
+		expect(result).toContain("`id` TEXT");
+		expect(result).toContain("`name` VARCHAR(100)");
 	});
 
 	test("foreign key constraint", () => {
@@ -189,9 +199,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain('FOREIGN KEY ("authorId") REFERENCES "users"("id")');
+		expect(result).toContain('FOREIGN KEY ("authorId") REFERENCES "users"("id")');
 	});
 
 	test("foreign key with onDelete cascade", () => {
@@ -209,9 +219,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE CASCADE',
 		);
 	});
@@ -231,9 +241,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE SET NULL',
 		);
 	});
@@ -253,9 +263,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE RESTRICT',
 		);
 	});
@@ -284,12 +294,12 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE CASCADE',
 		);
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("categoryId") REFERENCES "categories"("id") ON DELETE SET NULL',
 		);
 	});
@@ -310,9 +320,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorEmail") REFERENCES "users"("email")',
 		);
 	});
@@ -332,9 +342,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "postgresql"});
+		const result = ddl(posts, "postgresql");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE CASCADE',
 		);
 	});
@@ -354,9 +364,9 @@ describe("DDL generation", () => {
 			title: z.string(),
 		});
 
-		const ddl = generateDDL(posts, {dialect: "mysql"});
+		const result = ddl(posts, "mysql");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			"FOREIGN KEY (`authorId`) REFERENCES `users`(`id`) ON DELETE CASCADE",
 		);
 	});
@@ -372,11 +382,11 @@ describe("DDL generation", () => {
 				.db.type("TEXT"),
 		});
 
-		const ddl = generateDDL(custom, {dialect: "postgresql"});
+		const result = ddl(custom, "postgresql");
 
 		// Should use TEXT, not JSONB (which would be inferred from z.array())
-		expect(ddl).toContain('"tags" TEXT');
-		expect(ddl).not.toContain("JSONB");
+		expect(result).toContain('"tags" TEXT');
+		expect(result).not.toContain("JSONB");
 	});
 
 	test("explicit column type overrides inferred type for object", () => {
@@ -386,9 +396,9 @@ describe("DDL generation", () => {
 			data: z.object({foo: z.string()}).db.type("BLOB"),
 		});
 
-		const ddl = generateDDL(custom, {dialect: "sqlite"});
+		const result = ddl(custom, "sqlite");
 
-		expect(ddl).toContain('"data" BLOB');
+		expect(result).toContain('"data" BLOB');
 	});
 
 	test("explicit column type with encode/decode", () => {
@@ -401,9 +411,9 @@ describe("DDL generation", () => {
 				.db.type("TEXT"),
 		});
 
-		const ddl = generateDDL(custom, {dialect: "sqlite"});
+		const result = ddl(custom, "sqlite");
 
-		expect(ddl).toContain('"tags" TEXT');
+		expect(result).toContain('"tags" TEXT');
 	});
 
 	test("explicit column type across dialects", () => {
@@ -412,8 +422,8 @@ describe("DDL generation", () => {
 			binary: z.string().db.type("BYTEA"),
 		});
 
-		const pgDdl = generateDDL(custom, {dialect: "postgresql"});
-		const sqliteDdl = generateDDL(custom, {dialect: "sqlite"});
+		const pgDdl = ddl(custom, "postgresql");
+		const sqliteDdl = ddl(custom, "sqlite");
 
 		// Explicit type is used as-is in all dialects
 		expect(pgDdl).toContain('"binary" BYTEA');
@@ -432,9 +442,9 @@ describe("DDL generation", () => {
 			{unique: [["authorId", "slug"]]},
 		);
 
-		const ddl = generateDDL(posts, {dialect: "sqlite"});
+		const result = ddl(posts, "sqlite");
 
-		expect(ddl).toContain('UNIQUE ("authorId", "slug")');
+		expect(result).toContain('UNIQUE ("authorId", "slug")');
 	});
 
 	test("multiple compound unique constraints", () => {
@@ -454,10 +464,10 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(items, {dialect: "sqlite"});
+		const result = ddl(items, "sqlite");
 
-		expect(ddl).toContain('UNIQUE ("a", "b")');
-		expect(ddl).toContain('UNIQUE ("b", "c")');
+		expect(result).toContain('UNIQUE ("a", "b")');
+		expect(result).toContain('UNIQUE ("b", "c")');
 	});
 
 	test("compound foreign key", () => {
@@ -486,9 +496,9 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(orderItems, {dialect: "sqlite"});
+		const result = ddl(orderItems, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("orderId", "productId") REFERENCES "order_products"("orderId", "productId")',
 		);
 	});
@@ -519,9 +529,9 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(childTable, {dialect: "sqlite"});
+		const result = ddl(childTable, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("fkA", "fkB") REFERENCES "ref_table"("keyA", "keyB")',
 		);
 	});
@@ -552,9 +562,9 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(child, {dialect: "sqlite"});
+		const result = ddl(child, "sqlite");
 
-		expect(ddl).toContain(
+		expect(result).toContain(
 			'FOREIGN KEY ("parentA", "parentB") REFERENCES "parent"("a", "b") ON DELETE CASCADE',
 		);
 	});
@@ -586,10 +596,10 @@ describe("DDL generation", () => {
 			},
 		);
 
-		const ddl = generateDDL(child, {dialect: "mysql"});
+		const result = ddl(child, "mysql");
 
-		expect(ddl).toContain("UNIQUE (`parentA`, `code`)");
-		expect(ddl).toContain(
+		expect(result).toContain("UNIQUE (`parentA`, `code`)");
+		expect(result).toContain(
 			"FOREIGN KEY (`parentA`, `parentB`) REFERENCES `parent`(`a`, `b`)",
 		);
 	});
@@ -601,12 +611,12 @@ describe("DDL generation", () => {
 				name: z.string(),
 			});
 
-			const ddl = generateDDL(items, {dialect: "sqlite"});
+			const result = ddl(items, "sqlite");
 
 			// SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT
-			expect(ddl).toContain('"id" INTEGER PRIMARY KEY AUTOINCREMENT');
+			expect(result).toContain('"id" INTEGER PRIMARY KEY AUTOINCREMENT');
 			// Should not have separate PRIMARY KEY constraint
-			expect(ddl).not.toContain('PRIMARY KEY ("id")');
+			expect(result).not.toContain('PRIMARY KEY ("id")');
 		});
 
 		test("PostgreSQL auto-increment with GENERATED ALWAYS AS IDENTITY", () => {
@@ -615,12 +625,12 @@ describe("DDL generation", () => {
 				name: z.string(),
 			});
 
-			const ddl = generateDDL(items, {dialect: "postgresql"});
+			const result = ddl(items, "postgresql");
 
 			// PostgreSQL uses GENERATED ALWAYS AS IDENTITY (SQL standard)
-			expect(ddl).toContain('"id" INTEGER GENERATED ALWAYS AS IDENTITY');
+			expect(result).toContain('"id" INTEGER GENERATED ALWAYS AS IDENTITY');
 			// Should still have PRIMARY KEY constraint
-			expect(ddl).toContain('PRIMARY KEY ("id")');
+			expect(result).toContain('PRIMARY KEY ("id")');
 		});
 
 		test("MySQL auto-increment", () => {
@@ -629,12 +639,12 @@ describe("DDL generation", () => {
 				name: z.string(),
 			});
 
-			const ddl = generateDDL(items, {dialect: "mysql"});
+			const result = ddl(items, "mysql");
 
 			// MySQL uses AUTO_INCREMENT
-			expect(ddl).toContain("`id` INTEGER AUTO_INCREMENT");
+			expect(result).toContain("`id` INTEGER AUTO_INCREMENT");
 			// Should have PRIMARY KEY constraint
-			expect(ddl).toContain("PRIMARY KEY (`id`)");
+			expect(result).toContain("PRIMARY KEY (`id`)");
 		});
 
 		test("auto-increment excludes NOT NULL and DEFAULT", () => {
@@ -643,8 +653,8 @@ describe("DDL generation", () => {
 				name: z.string(),
 			});
 
-			const sqliteDdl = generateDDL(items, {dialect: "sqlite"});
-			const pgDdl = generateDDL(items, {dialect: "postgresql"});
+			const sqliteDdl = ddl(items, "sqlite");
+			const pgDdl = ddl(items, "postgresql");
 
 			// Auto-increment columns should not have explicit NOT NULL (implicit)
 			expect(sqliteDdl).not.toContain('"id" INTEGER NOT NULL');

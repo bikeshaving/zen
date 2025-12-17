@@ -7,64 +7,9 @@
 import {type Table, isTable, validateWithStandardSchema} from "./table.js";
 import {decodeData} from "./database.js";
 import {ident, isSQLIdentifier, makeTemplate} from "./template.js";
+import {renderSQL, type SQLDialect} from "./test-driver.js";
 
-// ============================================================================
-// Types (for test utilities)
-// ============================================================================
-
-export type SQLDialect = "sqlite" | "postgresql" | "mysql";
-
-// ============================================================================
-// Rendering (for test utilities)
-// ============================================================================
-
-/**
- * Quote an identifier based on dialect.
- */
-function quoteIdent(name: string, dialect: SQLDialect): string {
-	if (dialect === "mysql") {
-		return `\`${name.replace(/`/g, "``")}\``;
-	}
-	return `"${name.replace(/"/g, '""')}"`;
-}
-
-/**
- * Get placeholder syntax based on dialect.
- */
-function placeholder(index: number, dialect: SQLDialect): string {
-	if (dialect === "postgresql") {
-		return `$${index}`;
-	}
-	return "?";
-}
-
-/**
- * Render a template tuple to {sql, params} format.
- * Used by test utilities only - production code uses drivers.
- */
-function renderTemplate(
-	strings: TemplateStringsArray,
-	values: readonly unknown[],
-	dialect: SQLDialect,
-): {sql: string; params: unknown[]} {
-	let sql = "";
-	const params: unknown[] = [];
-
-	for (let i = 0; i < strings.length; i++) {
-		sql += strings[i];
-		if (i < values.length) {
-			const value = values[i];
-			if (isSQLIdentifier(value)) {
-				sql += quoteIdent(value.name, dialect);
-			} else {
-				params.push(value);
-				sql += placeholder(params.length, dialect);
-			}
-		}
-	}
-
-	return {sql, params};
-}
+export type {SQLDialect} from "./test-driver.js";
 
 export interface QueryOptions {
 	dialect?: SQLDialect;
@@ -151,7 +96,7 @@ export function renderFragment(
 	fragment: {strings: TemplateStringsArray; values: readonly unknown[]},
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
-	return renderTemplate(fragment.strings, fragment.values, dialect);
+	return renderSQL(fragment.strings, fragment.values, dialect);
 }
 
 // ============================================================================
@@ -226,7 +171,7 @@ export function createDDLFragment(
 /**
  * Build SELECT clause as a template with ident markers.
  *
- * Returns a template tuple that can be rendered with renderTemplate().
+ * Returns a template tuple that can be rendered with renderSQL().
  * All identifiers use ident() markers instead of dialect-specific quoting.
  *
  * @example
@@ -324,7 +269,7 @@ export function buildSelectColumns(
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
 	const template = buildSelectColumnsTemplate(tables);
-	return renderTemplate(template.strings, template.values, dialect);
+	return renderSQL(template.strings, template.values, dialect);
 }
 
 /**
@@ -336,7 +281,7 @@ export function buildSelectColumns(
  * - Table objects converted to ident() markers
  * - Regular values passed through
  *
- * The result can be rendered with renderTemplate() for final SQL output.
+ * The result can be rendered with renderSQL() for final SQL output.
  *
  * @param strings - Template strings
  * @param values - Template values
@@ -423,13 +368,13 @@ export function parseTemplate(
 	// Expand nested fragments/tables to flat template
 	const expanded = expandTemplate(strings, values, dialect);
 	// Render to SQL with dialect-specific quoting
-	const result = renderTemplate(expanded.strings, expanded.values, dialect);
+	const result = renderSQL(expanded.strings, expanded.values, dialect);
 	return {sql: result.sql.trim(), params: result.params};
 }
 
 /**
  * Transform a DDL fragment to a template tuple with ident markers.
- * No quoting happens here - that's deferred to renderTemplate/drivers.
+ * No quoting happens here - that's deferred to renderSQL/drivers.
  * @internal
  */
 function transformDDLFragmentToTemplate(
@@ -437,21 +382,21 @@ function transformDDLFragmentToTemplate(
 	dialect: SQLDialect,
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	// Lazy import to avoid circular dependencies
-	const {generateDDLTemplate, generateColumnDDLTemplate} = require("./ddl.js");
+	const {generateDDL, generateColumnDDL} = require("./ddl.js");
 	const table = fragment.table;
 	const options = fragment.options || {};
 
 	try {
 		switch (fragment.type) {
 			case "create-table":
-				return generateDDLTemplate(table, {...options, dialect});
+				return generateDDL(table, {...options, dialect});
 
 			case "alter-table-add-column": {
 				const {fieldName} = options;
 				const zodShape = table.schema.shape;
 				const meta = table.meta;
 
-				const colTemplate = generateColumnDDLTemplate(
+				const colTemplate = generateColumnDDL(
 					fieldName,
 					zodShape[fieldName],
 					meta.fields[fieldName] || {},
@@ -538,7 +483,7 @@ function transformDDLFragmentToTemplate(
 /**
  * Build a full SELECT query as a template with ident markers.
  *
- * Returns a template tuple that can be rendered with renderTemplate().
+ * Returns a template tuple that can be rendered with renderSQL().
  * The userClauses string is appended as-is (it should already contain placeholders).
  *
  * @example
@@ -593,7 +538,7 @@ export function buildQuery(
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
 	const template = buildQueryTemplate(tables, userClauses);
-	return renderTemplate(template.strings, template.values, dialect);
+	return renderSQL(template.strings, template.values, dialect);
 }
 
 /**
