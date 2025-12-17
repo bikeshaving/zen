@@ -706,39 +706,53 @@ describe("Schema marker validation", () => {
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted("invalid"),
-		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"inserted() requires a tagged template, symbol (NOW), or function",
+		);
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(new Date()),
-		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"inserted() requires a tagged template, symbol (NOW), or function",
+		);
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(null),
-		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"inserted() requires a tagged template, symbol (NOW), or function",
+		);
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(123),
-		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"inserted() requires a tagged template, symbol (NOW), or function",
+		);
 	});
 
 	test("updated() throws for invalid values", () => {
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated("invalid"),
-		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"updated() requires a tagged template, symbol (NOW), or function",
+		);
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated(new Date()),
-		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"updated() requires a tagged template, symbol (NOW), or function",
+		);
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated(undefined),
-		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
+		).toThrow(
+			"updated() requires a tagged template, symbol (NOW), or function",
+		);
 	});
 
 	test("inserted() accepts valid values", () => {
@@ -763,6 +777,34 @@ describe("Schema marker validation", () => {
 		// Should not throw - function
 		const schema2 = z.date().db.updated(() => new Date());
 		expect(schema2).toBeDefined();
+	});
+
+	test("upserted() accepts valid values", () => {
+		const {NOW} = require("./database.js");
+
+		// Should not throw - symbol
+		const schema1 = z.date().db.upserted(NOW);
+		expect(schema1).toBeDefined();
+
+		// Should not throw - function
+		const schema2 = z.date().db.upserted(() => new Date());
+		expect(schema2).toBeDefined();
+
+		// Should not throw - tagged template
+		const schema3 = z.date().db.upserted`CURRENT_TIMESTAMP`;
+		expect(schema3).toBeDefined();
+	});
+
+	test("upserted() sets correct metadata", () => {
+		const {NOW} = require("./database.js");
+
+		const TestTable = table("test_upserted", {
+			id: z.string().db.primary(),
+			modifiedAt: z.date().db.upserted(NOW),
+		});
+
+		expect(TestTable.meta.fields.modifiedAt.upserted).toBeDefined();
+		expect(TestTable.meta.fields.modifiedAt.upserted?.type).toBe("symbol");
 	});
 
 	test("tagged template with interpolations parameterizes values", () => {

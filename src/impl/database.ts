@@ -137,7 +137,7 @@ function extractDBExpressions(
 
 /**
  * Inject schema-defined values for insert/update operations.
- * Checks field metadata for .db.inserted() and .db.updated() markers.
+ * Checks field metadata for .db.inserted(), .db.updated(), and .db.upserted() markers.
  *
  * @param table - Table definition with schema metadata
  * @param data - User-provided data
@@ -159,10 +159,13 @@ function injectSchemaExpressions<T extends Table<any>>(
 		if (fieldMeta.autoIncrement) continue;
 
 		// Determine which metadata to use
+		// - inserted(): INSERT only
+		// - updated(): UPDATE only
+		// - upserted(): both INSERT and UPDATE (fallback)
 		const meta =
 			operation === "insert"
-				? fieldMeta.inserted ?? fieldMeta.updated // inserted() or updated() on insert
-				: fieldMeta.updated; // only updated() on update
+				? (fieldMeta.inserted ?? fieldMeta.upserted)
+				: (fieldMeta.updated ?? fieldMeta.upserted);
 
 		if (!meta) continue;
 
@@ -973,7 +976,12 @@ export class Transaction {
 		);
 		const encoded = encodeData(table, validated);
 
-		const insertParts = buildInsertParts(table.name, encoded, expressions, symbols);
+		const insertParts = buildInsertParts(
+			table.name,
+			encoded,
+			expressions,
+			symbols,
+		);
 
 		if (this.#driver.supportsReturning) {
 			const {strings, values} = appendReturning(insertParts);
@@ -1959,7 +1967,12 @@ export class Database extends EventTarget {
 		);
 		const encoded = encodeData(table, validated);
 
-		const insertParts = buildInsertParts(table.name, encoded, expressions, symbols);
+		const insertParts = buildInsertParts(
+			table.name,
+			encoded,
+			expressions,
+			symbols,
+		);
 
 		if (this.#driver.supportsReturning) {
 			const {strings, values} = appendReturning(insertParts);

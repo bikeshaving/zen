@@ -14,10 +14,7 @@ import {
 	createDDLFragment,
 	type DDLFragment,
 } from "./query.js";
-import {
-	isSQLSymbol,
-	type SQLSymbol,
-} from "./database.js";
+import {isSQLSymbol, type SQLSymbol} from "./database.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -227,8 +224,16 @@ export interface FieldDbMeta {
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
-	/** Value to apply on INSERT and UPDATE */
+	/** Value to apply on UPDATE only */
 	updated?: {
+		type: "sql" | "symbol" | "function";
+		sql?: string;
+		params?: unknown[];
+		symbol?: SQLSymbol;
+		fn?: () => unknown;
+	};
+	/** Value to apply on both INSERT and UPDATE */
+	upserted?: {
 		type: "sql" | "symbol" | "function";
 		sql?: string;
 		params?: unknown[];
@@ -244,9 +249,7 @@ export interface FieldDbMeta {
 /**
  * Check if a value is a TemplateStringsArray (for tagged template detection).
  */
-function isTemplateStringsArray(
-	value: unknown,
-): value is TemplateStringsArray {
+function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
 	return Array.isArray(value) && "raw" in value;
 }
 
@@ -405,10 +408,7 @@ function createDbMethods(schema: ZodTypeAny) {
 		 * slug: z.string().db.inserted`LOWER(name)`
 		 */
 		inserted(
-			stringsOrValue:
-				| TemplateStringsArray
-				| SQLSymbol
-				| (() => unknown),
+			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
 			...templateValues: unknown[]
 		) {
 			let insertedMeta: FieldDbMeta["inserted"];
@@ -425,7 +425,10 @@ function createDbMethods(schema: ZodTypeAny) {
 						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {sql: string; params: readonly unknown[]};
+							const fragment = value as unknown as {
+								sql: string;
+								params: readonly unknown[];
+							};
 							parts.push(fragment.sql);
 							params.push(...fragment.params);
 						} else {
@@ -463,21 +466,18 @@ function createDbMethods(schema: ZodTypeAny) {
 		},
 
 		/**
-		 * Set a value to apply on INSERT and UPDATE.
+		 * Set a value to apply on UPDATE only.
 		 *
 		 * Same forms as inserted().
 		 *
-		 * Field becomes optional for insert/update.
+		 * Field becomes optional for update operations.
 		 *
 		 * @example
-		 * updatedAt: z.date().db.updated(NOW)
+		 * modifiedAt: z.date().db.updated(NOW)
 		 * lastModified: z.date().db.updated(() => new Date())
 		 */
 		updated(
-			stringsOrValue:
-				| TemplateStringsArray
-				| SQLSymbol
-				| (() => unknown),
+			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
 			...templateValues: unknown[]
 		) {
 			let updatedMeta: FieldDbMeta["updated"];
@@ -494,7 +494,10 @@ function createDbMethods(schema: ZodTypeAny) {
 						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {sql: string; params: readonly unknown[]};
+							const fragment = value as unknown as {
+								sql: string;
+								params: readonly unknown[];
+							};
 							parts.push(fragment.sql);
 							params.push(...fragment.params);
 						} else {
@@ -529,6 +532,75 @@ function createDbMethods(schema: ZodTypeAny) {
 			// Make schema optional for input type
 			const optionalSchema = schema.optional();
 			return setDBMeta(optionalSchema, {updated: updatedMeta});
+		},
+
+		/**
+		 * Set a value to apply on both INSERT and UPDATE.
+		 *
+		 * Same forms as inserted().
+		 *
+		 * Field becomes optional for insert/update.
+		 *
+		 * @example
+		 * updatedAt: z.date().db.upserted(NOW)
+		 * lastModified: z.date().db.upserted(() => new Date())
+		 */
+		upserted(
+			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
+			...templateValues: unknown[]
+		) {
+			let upsertedMeta: FieldDbMeta["upserted"];
+
+			if (isTemplateStringsArray(stringsOrValue)) {
+				// Tagged template → SQL expression
+				// Parse like derive() does: detect SQL fragments, parameterize other values
+				const parts: string[] = [];
+				const params: unknown[] = [];
+
+				for (let i = 0; i < stringsOrValue.length; i++) {
+					parts.push(stringsOrValue[i]);
+					if (i < templateValues.length) {
+						const value = templateValues[i];
+						// Check if it's an SQL fragment (from cols proxy or other fragments)
+						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
+							const fragment = value as unknown as {
+								sql: string;
+								params: readonly unknown[];
+							};
+							parts.push(fragment.sql);
+							params.push(...fragment.params);
+						} else {
+							// Regular value - parameterize it
+							parts.push("?");
+							params.push(value);
+						}
+					}
+				}
+
+				const sql = parts.join("").trim();
+				upsertedMeta = {type: "sql", sql, params};
+			} else if (isSQLSymbol(stringsOrValue)) {
+				upsertedMeta = {type: "symbol", symbol: stringsOrValue};
+			} else if (typeof stringsOrValue === "function") {
+				upsertedMeta = {type: "function", fn: stringsOrValue};
+			} else {
+				throw new TableDefinitionError(
+					`upserted() requires a tagged template, symbol (NOW), or function. Got: ${typeof stringsOrValue}`,
+				);
+			}
+
+			// Validate: upserted cannot be combined with encode/decode
+			const existing = getDBMeta(schema);
+			if (existing.encode || existing.decode) {
+				throw new TableDefinitionError(
+					`upserted() cannot be combined with encode() or decode(). ` +
+						`DB expressions and functions bypass encoding/decoding.`,
+				);
+			}
+
+			// Make schema optional for input type
+			const optionalSchema = schema.optional();
+			return setDBMeta(optionalSchema, {upserted: upsertedMeta});
 		},
 
 		/**
@@ -1244,6 +1316,9 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		}
 		if (fieldDbMeta.updated) {
 			dbMeta.updated = fieldDbMeta.updated;
+		}
+		if (fieldDbMeta.upserted) {
+			dbMeta.upserted = fieldDbMeta.upserted;
 		}
 
 		meta.fields[key] = dbMeta;
@@ -2018,29 +2093,41 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	 * slug: z.string().db.inserted`LOWER(name)`
 	 */
 	inserted(
-		value:
-			| import("./database.js").SQLSymbol
-			| (() => z.infer<Schema>),
+		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
 	): Schema;
 	inserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 
 	/**
-	 * Set a value to apply on INSERT and UPDATE.
+	 * Set a value to apply on UPDATE only.
+	 *
+	 * Same forms as inserted().
+	 *
+	 * Field becomes optional for update operations.
+	 *
+	 * @example
+	 * modifiedAt: z.date().db.updated(NOW)
+	 * lastModified: z.date().db.updated(() => new Date())
+	 */
+	updated(
+		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
+	): Schema;
+	updated(strings: TemplateStringsArray, ...values: unknown[]): Schema;
+
+	/**
+	 * Set a value to apply on both INSERT and UPDATE.
 	 *
 	 * Same forms as inserted().
 	 *
 	 * Field becomes optional for insert/update.
 	 *
 	 * @example
-	 * updatedAt: z.date().db.updated(NOW)
-	 * lastModified: z.date().db.updated(() => new Date())
+	 * updatedAt: z.date().db.upserted(NOW)
+	 * lastModified: z.date().db.upserted(() => new Date())
 	 */
-	updated(
-		value:
-			| import("./database.js").SQLSymbol
-			| (() => z.infer<Schema>),
+	upserted(
+		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
 	): Schema;
-	updated(strings: TemplateStringsArray, ...values: unknown[]): Schema;
+	upserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 
 	/**
 	 * Mark this field as auto-incrementing.

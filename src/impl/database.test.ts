@@ -27,10 +27,7 @@ const Posts = table("posts", {
 
 // Helper to build SQL from template parts (for assertions)
 // Matches real driver behavior: inlines SQL symbols, uses ? for other values
-function buildSQL(
-	strings: TemplateStringsArray,
-	values: unknown[],
-): string {
+function buildSQL(strings: TemplateStringsArray, values: unknown[]): string {
 	let sql = strings[0];
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
@@ -798,12 +795,12 @@ describe("transaction()", () => {
 		expect(result).toEqual({id: USER_ID, name: "Alice"});
 	});
 
-	test("applies schema markers (inserted/updated) in transaction", async () => {
+	test("applies schema markers (inserted/upserted) in transaction", async () => {
 		const AutoTable = table("auto_tx", {
 			id: z.string().db.primary(),
 			name: z.string(),
 			createdAt: z.date().db.inserted(NOW),
-			updatedAt: z.date().db.updated(NOW),
+			updatedAt: z.date().db.upserted(NOW),
 		});
 
 		const driver = createMockDriver();
@@ -1085,7 +1082,7 @@ describe("Soft Delete", () => {
 });
 
 describe("DB Expressions", () => {
-	const {db} = require("./database.js");
+	const {db: _db} = require("./database.js");
 
 	const TimestampTable = table("timestamps", {
 		id: z.string().db.primary(),
@@ -1194,15 +1191,15 @@ describe("DB Expressions", () => {
 		});
 	});
 
-	describe("schema markers (.db.inserted() / .db.updated())", () => {
+	describe("schema markers (.db.inserted() / .db.updated() / .db.upserted())", () => {
 		const AutoTable = table("auto", {
 			id: z.string().db.primary(),
 			name: z.string(),
 			createdAt: z.date().db.inserted(NOW),
-			updatedAt: z.date().db.updated(NOW),
+			updatedAt: z.date().db.upserted(NOW),
 		});
 
-		test("insert auto-applies inserted() and updated() expressions", async () => {
+		test("insert auto-applies inserted() and upserted() expressions", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "123",
@@ -1225,7 +1222,7 @@ describe("DB Expressions", () => {
 			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(2);
 		});
 
-		test("update auto-applies updated() expression but not inserted()", async () => {
+		test("update auto-applies upserted() expression but not inserted()", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "123",
@@ -1330,6 +1327,40 @@ describe("DB Expressions", () => {
 			await expect(database.update(InsertOnlyTable, {}, "123")).rejects.toThrow(
 				"No fields to update",
 			);
+		});
+
+		test("updated() only applies on UPDATE, not INSERT", async () => {
+			const UpdateOnlyTable = table("update_only", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				modifiedAt: z.date().db.updated(NOW),
+			});
+
+			const driver = createMockDriver();
+			(driver.get as any).mockImplementation(async () => ({
+				id: "123",
+				name: "Test",
+				modifiedAt: new Date().toISOString(),
+			}));
+			const database = new Database(driver);
+
+			// Insert should NOT apply updated() - must provide modifiedAt explicitly
+			await database.insert(UpdateOnlyTable, {
+				id: "123",
+				name: "Test",
+				modifiedAt: new Date("2020-01-01"),
+			});
+			const [insertStrings, insertValues] = (driver.get as any).mock.calls[0];
+			const insertSql = buildSQL(insertStrings, insertValues);
+			// modifiedAt should be a parameter, not CURRENT_TIMESTAMP
+			expect(insertSql).not.toContain("CURRENT_TIMESTAMP");
+
+			// Update SHOULD apply updated()
+			(driver.get as any).mockClear();
+			await database.update(UpdateOnlyTable, {name: "Updated"}, "123");
+			const [updateStrings, updateValues] = (driver.get as any).mock.calls[0];
+			const updateSql = buildSQL(updateStrings, updateValues);
+			expect(updateSql).toContain('"modifiedAt" = CURRENT_TIMESTAMP');
 		});
 	});
 });
