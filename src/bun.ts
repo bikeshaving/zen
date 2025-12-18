@@ -6,13 +6,18 @@
  */
 
 import {SQL} from "bun";
-import type {Driver} from "./zen.js";
+import type {Driver, Table, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
+	EnsureError,
+	SchemaDriftError,
+	ConstraintPreflightError,
 	isSQLSymbol,
 	isSQLIdentifier,
 	NOW,
 } from "./zen.js";
+import {generateDDL} from "./impl/ddl.js";
+import {renderDDL} from "./impl/test-driver.js";
 
 type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
@@ -449,6 +454,612 @@ export default class BunDriver implements Driver {
 				await this.#sql.unsafe("ROLLBACK", []);
 				throw error;
 			}
+		}
+	}
+
+	// ==========================================================================
+	// Schema Ensure Methods
+	// ==========================================================================
+
+	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		const tableName = table.name;
+		let step = 0;
+		let applied = false;
+
+		try {
+			// Step 0: Check if table exists
+			const exists = await this.#tableExists(tableName);
+
+			if (!exists) {
+				// Step 1: Create table with full structure
+				step = 1;
+				const ddlTemplate = generateDDL(table, {dialect: this.#dialect});
+				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate[1], this.#dialect);
+
+				// Execute each statement (CREATE TABLE + CREATE INDEX statements)
+				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+					await this.#sql.unsafe(stmt.trim(), []);
+				}
+				applied = true;
+			} else {
+				// Step 2: Add missing columns
+				step = 2;
+				const columnsApplied = await this.#ensureMissingColumns(table);
+				applied = applied || columnsApplied;
+
+				// Step 3: Add missing non-unique indexes
+				step = 3;
+				const indexesApplied = await this.#ensureMissingIndexes(table);
+				applied = applied || indexesApplied;
+
+				// Step 4: Check for missing constraints (throws SchemaDriftError)
+				step = 4;
+				await this.#checkMissingConstraints(table);
+			}
+
+			return {applied};
+		} catch (error) {
+			if (error instanceof SchemaDriftError || error instanceof EnsureError) {
+				throw error;
+			}
+			throw new EnsureError(
+				`ensureTable failed at step ${step}: ${error instanceof Error ? error.message : String(error)}`,
+				{operation: "ensureTable", table: tableName, step},
+				{cause: error},
+			);
+		}
+	}
+
+	async ensureConstraints<T extends Table<any>>(
+		table: T,
+	): Promise<EnsureResult> {
+		const tableName = table.name;
+		let step = 0;
+		let applied = false;
+
+		try {
+			// Step 0: Verify table exists
+			const exists = await this.#tableExists(tableName);
+			if (!exists) {
+				throw new Error(
+					`Table "${tableName}" does not exist. Run ensureTable() first.`,
+				);
+			}
+
+			// Step 1: Get current constraints
+			step = 1;
+			const existingConstraints = await this.#getConstraints(tableName);
+
+			// Step 2: Apply missing unique constraints with preflight
+			step = 2;
+			const uniquesApplied = await this.#ensureUniqueConstraints(
+				table,
+				existingConstraints,
+			);
+			applied = applied || uniquesApplied;
+
+			// Step 3: Apply missing foreign keys with preflight
+			step = 3;
+			const fksApplied = await this.#ensureForeignKeys(
+				table,
+				existingConstraints,
+			);
+			applied = applied || fksApplied;
+
+			return {applied};
+		} catch (error) {
+			if (
+				error instanceof ConstraintPreflightError ||
+				error instanceof EnsureError
+			) {
+				throw error;
+			}
+			throw new EnsureError(
+				`ensureConstraints failed at step ${step}: ${error instanceof Error ? error.message : String(error)}`,
+				{operation: "ensureConstraints", table: tableName, step},
+				{cause: error},
+			);
+		}
+	}
+
+	// ==========================================================================
+	// Introspection Helpers (private)
+	// ==========================================================================
+
+	async #tableExists(tableName: string): Promise<boolean> {
+		if (this.#dialect === "sqlite") {
+			const result = await this.#sql.unsafe(
+				`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`,
+				[tableName],
+			);
+			return result.length > 0;
+		} else if (this.#dialect === "postgresql") {
+			const result = await this.#sql.unsafe(
+				`SELECT 1 FROM information_schema.tables WHERE table_name = $1 AND table_schema = 'public'`,
+				[tableName],
+			);
+			return result.length > 0;
+		} else {
+			// MySQL
+			const result = await this.#sql.unsafe(
+				`SELECT 1 FROM information_schema.tables WHERE table_name = ? AND table_schema = DATABASE()`,
+				[tableName],
+			);
+			return result.length > 0;
+		}
+	}
+
+	async #getColumns(
+		tableName: string,
+	): Promise<{name: string; type: string; notnull: boolean}[]> {
+		if (this.#dialect === "sqlite") {
+			const result = await this.#sql.unsafe(
+				`PRAGMA table_info(${quoteIdent(tableName, "sqlite")})`,
+				[],
+			);
+			return (result as any[]).map((row) => ({
+				name: row.name,
+				type: row.type,
+				notnull: row.notnull === 1,
+			}));
+		} else if (this.#dialect === "postgresql") {
+			const result = await this.#sql.unsafe(
+				`SELECT column_name as name, data_type as type, is_nullable = 'NO' as notnull
+				 FROM information_schema.columns WHERE table_name = $1 AND table_schema = 'public'`,
+				[tableName],
+			);
+			return result as any[];
+		} else {
+			// MySQL
+			const result = await this.#sql.unsafe(
+				`SELECT column_name as name, data_type as type, is_nullable = 'NO' as notnull
+				 FROM information_schema.columns WHERE table_name = ? AND table_schema = DATABASE()`,
+				[tableName],
+			);
+			return result as any[];
+		}
+	}
+
+	async #getIndexes(
+		tableName: string,
+	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
+		if (this.#dialect === "sqlite") {
+			const indexList = (await this.#sql.unsafe(
+				`PRAGMA index_list(${quoteIdent(tableName, "sqlite")})`,
+				[],
+			)) as any[];
+
+			const indexes: {name: string; columns: string[]; unique: boolean}[] = [];
+			for (const idx of indexList) {
+				if (idx.origin === "pk") continue; // Skip primary key index
+				const indexInfo = (await this.#sql.unsafe(
+					`PRAGMA index_info(${quoteIdent(idx.name, "sqlite")})`,
+					[],
+				)) as any[];
+				indexes.push({
+					name: idx.name,
+					columns: indexInfo.map((col) => col.name),
+					unique: idx.unique === 1,
+				});
+			}
+			return indexes;
+		} else if (this.#dialect === "postgresql") {
+			const result = await this.#sql.unsafe(
+				`SELECT i.relname as name,
+				        array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) as columns,
+				        ix.indisunique as unique
+				 FROM pg_index ix
+				 JOIN pg_class i ON i.oid = ix.indexrelid
+				 JOIN pg_class t ON t.oid = ix.indrelid
+				 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+				 WHERE t.relname = $1 AND NOT ix.indisprimary
+				 GROUP BY i.relname, ix.indisunique`,
+				[tableName],
+			);
+			return result as any[];
+		} else {
+			// MySQL
+			const result = await this.#sql.unsafe(
+				`SELECT index_name as name,
+				        GROUP_CONCAT(column_name ORDER BY seq_in_index) as columns,
+				        NOT non_unique as \`unique\`
+				 FROM information_schema.statistics
+				 WHERE table_name = ? AND table_schema = DATABASE() AND index_name != 'PRIMARY'
+				 GROUP BY index_name, non_unique`,
+				[tableName],
+			);
+			return (result as any[]).map((row) => ({
+				...row,
+				columns: row.columns.split(","),
+			}));
+		}
+	}
+
+	async #getConstraints(tableName: string): Promise<
+		{
+			name: string;
+			type: "unique" | "foreign_key" | "primary_key";
+			columns: string[];
+			referencedTable?: string;
+			referencedColumns?: string[];
+		}[]
+	> {
+		if (this.#dialect === "sqlite") {
+			const constraints: any[] = [];
+
+			// Get unique constraints from indexes
+			const indexes = await this.#getIndexes(tableName);
+			for (const idx of indexes) {
+				if (idx.unique) {
+					constraints.push({
+						name: idx.name,
+						type: "unique",
+						columns: idx.columns,
+					});
+				}
+			}
+
+			// Get foreign keys
+			const fks = (await this.#sql.unsafe(
+				`PRAGMA foreign_key_list(${quoteIdent(tableName, "sqlite")})`,
+				[],
+			)) as any[];
+
+			// Group by id (each FK can span multiple columns)
+			const fkMap = new Map<
+				number,
+				{table: string; from: string[]; to: string[]}
+			>();
+			for (const fk of fks) {
+				if (!fkMap.has(fk.id)) {
+					fkMap.set(fk.id, {table: fk.table, from: [], to: []});
+				}
+				const entry = fkMap.get(fk.id)!;
+				entry.from.push(fk.from);
+				entry.to.push(fk.to);
+			}
+
+			for (const [id, fk] of fkMap) {
+				constraints.push({
+					name: `fk_${tableName}_${id}`,
+					type: "foreign_key",
+					columns: fk.from,
+					referencedTable: fk.table,
+					referencedColumns: fk.to,
+				});
+			}
+
+			return constraints;
+		} else if (this.#dialect === "postgresql") {
+			const result = await this.#sql.unsafe(
+				`SELECT
+				   tc.constraint_name as name,
+				   tc.constraint_type as type,
+				   array_agg(kcu.column_name ORDER BY kcu.ordinal_position) as columns,
+				   ccu.table_name as referenced_table,
+				   array_agg(ccu.column_name ORDER BY kcu.ordinal_position) as referenced_columns
+				 FROM information_schema.table_constraints tc
+				 JOIN information_schema.key_column_usage kcu
+				   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+				 LEFT JOIN information_schema.constraint_column_usage ccu
+				   ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+				 WHERE tc.table_name = $1 AND tc.table_schema = 'public'
+				   AND tc.constraint_type IN ('UNIQUE', 'FOREIGN KEY')
+				 GROUP BY tc.constraint_name, tc.constraint_type, ccu.table_name`,
+				[tableName],
+			);
+			return (result as any[]).map((row) => ({
+				name: row.name,
+				type: row.type === "UNIQUE" ? "unique" : "foreign_key",
+				columns: row.columns,
+				referencedTable: row.referenced_table,
+				referencedColumns: row.referenced_columns,
+			}));
+		} else {
+			// MySQL
+			const result = await this.#sql.unsafe(
+				`SELECT
+				   tc.constraint_name as name,
+				   tc.constraint_type as type,
+				   GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position) as columns,
+				   kcu.referenced_table_name as referenced_table,
+				   GROUP_CONCAT(kcu.referenced_column_name ORDER BY kcu.ordinal_position) as referenced_columns
+				 FROM information_schema.table_constraints tc
+				 JOIN information_schema.key_column_usage kcu
+				   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+				 WHERE tc.table_name = ? AND tc.table_schema = DATABASE()
+				   AND tc.constraint_type IN ('UNIQUE', 'FOREIGN KEY')
+				 GROUP BY tc.constraint_name, tc.constraint_type, kcu.referenced_table_name`,
+				[tableName],
+			);
+			return (result as any[]).map((row) => ({
+				name: row.name,
+				type: row.type === "UNIQUE" ? "unique" : "foreign_key",
+				columns: row.columns.split(","),
+				referencedTable: row.referenced_table,
+				referencedColumns: row.referenced_columns?.split(","),
+			}));
+		}
+	}
+
+	// ==========================================================================
+	// Schema Ensure Helpers (private)
+	// ==========================================================================
+
+	async #ensureMissingColumns<T extends Table<any>>(
+		table: T,
+	): Promise<boolean> {
+		const existingCols = await this.#getColumns(table.name);
+		const existingColNames = new Set(existingCols.map((c) => c.name));
+		const schemaFields = Object.keys(table.schema.shape);
+
+		let applied = false;
+		for (const fieldName of schemaFields) {
+			if (!existingColNames.has(fieldName)) {
+				await this.#addColumn(table, fieldName);
+				applied = true;
+			}
+		}
+		return applied;
+	}
+
+	async #addColumn<T extends Table<any>>(
+		table: T,
+		fieldName: string,
+	): Promise<void> {
+		const {generateColumnDDL} = await import("./impl/ddl.js");
+		const zodType = table.schema.shape[fieldName];
+		const fieldMeta = table.meta.fields[fieldName] || {};
+
+		const colTemplate = generateColumnDDL(
+			fieldName,
+			zodType,
+			fieldMeta,
+			this.#dialect,
+		);
+		const colSQL = renderDDL(colTemplate[0], colTemplate[1], this.#dialect);
+
+		// Note: SQLite doesn't support IF NOT EXISTS in ALTER TABLE ADD COLUMN
+		// PostgreSQL 9.6+ supports ADD COLUMN IF NOT EXISTS
+		// MySQL doesn't support it
+		const ifNotExists = this.#dialect === "postgresql" ? "IF NOT EXISTS " : "";
+		const sql = `ALTER TABLE ${quoteIdent(table.name, this.#dialect)} ADD COLUMN ${ifNotExists}${colSQL}`;
+		await this.#sql.unsafe(sql, []);
+	}
+
+	async #ensureMissingIndexes<T extends Table<any>>(
+		table: T,
+	): Promise<boolean> {
+		const existingIndexes = await this.#getIndexes(table.name);
+		const existingIndexNames = new Set(existingIndexes.map((i) => i.name));
+		const meta = table.meta;
+
+		let applied = false;
+
+		// Per-field indexes
+		for (const fieldName of meta.indexed) {
+			const indexName = `idx_${table.name}_${fieldName}`;
+			if (!existingIndexNames.has(indexName)) {
+				await this.#createIndex(table.name, indexName, [fieldName], false);
+				applied = true;
+			}
+		}
+
+		// Compound indexes
+		for (const indexCols of table.indexes) {
+			const indexName = `idx_${table.name}_${indexCols.join("_")}`;
+			if (!existingIndexNames.has(indexName)) {
+				await this.#createIndex(table.name, indexName, indexCols, false);
+				applied = true;
+			}
+		}
+
+		return applied;
+	}
+
+	async #createIndex(
+		tableName: string,
+		indexName: string,
+		columns: string[],
+		unique: boolean,
+	): Promise<void> {
+		const uniqueKw = unique ? "UNIQUE " : "";
+		const colList = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
+		const sql = `CREATE ${uniqueKw}INDEX IF NOT EXISTS ${quoteIdent(indexName, this.#dialect)} ON ${quoteIdent(tableName, this.#dialect)} (${colList})`;
+		await this.#sql.unsafe(sql, []);
+	}
+
+	async #checkMissingConstraints<T extends Table<any>>(
+		table: T,
+	): Promise<void> {
+		const existingConstraints = await this.#getConstraints(table.name);
+		const meta = table.meta;
+		const fields = Object.keys(meta.fields);
+
+		// Check for missing unique constraints
+		for (const fieldName of fields) {
+			const fieldMeta = meta.fields[fieldName];
+			if (fieldMeta.unique) {
+				const hasUnique = existingConstraints.some(
+					(c) =>
+						c.type === "unique" &&
+						c.columns.length === 1 &&
+						c.columns[0] === fieldName,
+				);
+				if (!hasUnique) {
+					throw new SchemaDriftError(
+						`Table "${table.name}" is missing UNIQUE constraint on column "${fieldName}"`,
+						{
+							table: table.name,
+							drift: `missing unique:${fieldName}`,
+							suggestion: `Run db.ensureConstraints(${table.name}) to apply constraints`,
+						},
+					);
+				}
+			}
+		}
+
+		// Check for missing foreign keys
+		for (const ref of meta.references) {
+			const hasFk = existingConstraints.some(
+				(c) =>
+					c.type === "foreign_key" &&
+					c.columns.length === 1 &&
+					c.columns[0] === ref.fieldName &&
+					c.referencedTable === ref.table.name,
+			);
+			if (!hasFk) {
+				throw new SchemaDriftError(
+					`Table "${table.name}" is missing FOREIGN KEY on column "${ref.fieldName}" referencing "${ref.table.name}"`,
+					{
+						table: table.name,
+						drift: `missing fk:${ref.fieldName}->${ref.table.name}`,
+						suggestion: `Run db.ensureConstraints(${table.name}) to apply constraints`,
+					},
+				);
+			}
+		}
+	}
+
+	async #ensureUniqueConstraints<T extends Table<any>>(
+		table: T,
+		existingConstraints: {type: string; columns: string[]}[],
+	): Promise<boolean> {
+		const meta = table.meta;
+		const fields = Object.keys(meta.fields);
+		let applied = false;
+
+		for (const fieldName of fields) {
+			const fieldMeta = meta.fields[fieldName];
+			if (fieldMeta.unique) {
+				const hasUnique = existingConstraints.some(
+					(c) =>
+						c.type === "unique" &&
+						c.columns.length === 1 &&
+						c.columns[0] === fieldName,
+				);
+
+				if (!hasUnique) {
+					// Preflight: check for duplicates
+					await this.#preflightUnique(table.name, [fieldName]);
+
+					// Apply constraint via unique index
+					const indexName = `uniq_${table.name}_${fieldName}`;
+					await this.#createIndex(table.name, indexName, [fieldName], true);
+					applied = true;
+				}
+			}
+		}
+
+		return applied;
+	}
+
+	async #ensureForeignKeys<T extends Table<any>>(
+		table: T,
+		existingConstraints: {
+			type: string;
+			columns: string[];
+			referencedTable?: string;
+		}[],
+	): Promise<boolean> {
+		const meta = table.meta;
+		let applied = false;
+
+		for (const ref of meta.references) {
+			const hasFk = existingConstraints.some(
+				(c) =>
+					c.type === "foreign_key" &&
+					c.columns.length === 1 &&
+					c.columns[0] === ref.fieldName &&
+					c.referencedTable === ref.table.name,
+			);
+
+			if (!hasFk) {
+				// Preflight: check for orphans
+				await this.#preflightForeignKey(
+					table.name,
+					ref.fieldName,
+					ref.table.name,
+					ref.referencedField,
+				);
+
+				// Note: Adding FK to existing table is complex and dialect-specific
+				// SQLite requires table rebuild, Postgres/MySQL can ALTER TABLE
+				// For now, throw an error directing users to manual migration
+				throw new Error(
+					`Adding foreign key constraints to existing tables is not yet supported. ` +
+						`Table "${table.name}" column "${ref.fieldName}" -> "${ref.table.name}"."${ref.referencedField}". ` +
+						`Please use a manual migration.`,
+				);
+			}
+		}
+
+		return applied;
+	}
+
+	async #preflightUnique(tableName: string, columns: string[]): Promise<void> {
+		const colList = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
+		const sql = `SELECT ${colList}, COUNT(*) as cnt FROM ${quoteIdent(tableName, this.#dialect)} GROUP BY ${colList} HAVING cnt > 1 LIMIT 1`;
+
+		const result = await this.#sql.unsafe(sql, []);
+
+		if (result.length > 0) {
+			const diagQuery = `SELECT ${columns.join(", ")}, COUNT(*) as cnt FROM ${tableName} GROUP BY ${columns.join(", ")} HAVING cnt > 1`;
+
+			// Count total duplicates
+			const countSql = `SELECT COUNT(*) as total FROM (${sql.replace(" LIMIT 1", "")}) t`;
+			const countResult = await this.#sql.unsafe(countSql, []);
+			const violationCount = (countResult[0] as any)?.total ?? 1;
+
+			throw new ConstraintPreflightError(
+				`Cannot add UNIQUE constraint on "${tableName}"(${columns.join(", ")}): duplicate values exist`,
+				{
+					table: tableName,
+					constraint: `unique:${columns.join(",")}`,
+					violationCount,
+					query: diagQuery,
+				},
+			);
+		}
+	}
+
+	async #preflightForeignKey(
+		tableName: string,
+		column: string,
+		refTable: string,
+		refColumn: string,
+	): Promise<void> {
+		const sql = `SELECT 1 FROM ${quoteIdent(tableName, this.#dialect)} t
+			WHERE t.${quoteIdent(column, this.#dialect)} IS NOT NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r
+				WHERE r.${quoteIdent(refColumn, this.#dialect)} = t.${quoteIdent(column, this.#dialect)}
+			) LIMIT 1`;
+
+		const result = await this.#sql.unsafe(sql, []);
+
+		if (result.length > 0) {
+			const diagQuery = `SELECT t.* FROM ${tableName} t WHERE t.${column} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${refTable} r WHERE r.${refColumn} = t.${column})`;
+
+			// Count orphans
+			const countSql = sql
+				.replace("SELECT 1", "SELECT COUNT(*)")
+				.replace(" LIMIT 1", "");
+			const countResult = await this.#sql.unsafe(countSql, []);
+			const violationCount =
+				(countResult[0] as any)?.["COUNT(*)"] ??
+				(countResult[0] as any)?.count ??
+				1;
+
+			throw new ConstraintPreflightError(
+				`Cannot add FOREIGN KEY on "${tableName}"."${column}" -> "${refTable}"."${refColumn}": orphan records exist`,
+				{
+					table: tableName,
+					constraint: `fk:${column}->${refTable}.${refColumn}`,
+					violationCount,
+					query: diagQuery,
+				},
+			);
 		}
 	}
 }
