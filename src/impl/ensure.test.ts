@@ -673,6 +673,43 @@ for (const dialect of dialects) {
 				expect(updated2).toBe(0);
 			});
 
+			it("throws EnsureError when source column doesn't exist", async () => {
+				if (maybeSkip()) return;
+
+				const tableName = `ucopy_missing_src_${runId}_${testId}`;
+				const Users = table(tableName, {
+					id: stringId().db.primary(),
+					newName: z.string().nullable(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", newName: null});
+
+				// Try to copy from non-existent column "oldName"
+				await expect(db.copyColumn(Users, "oldName", "newName")).rejects.toMatchObject({
+					name: "EnsureError",
+					operation: "copyColumn",
+				});
+			});
+
+			it("throws Error when target column doesn't exist in schema", async () => {
+				if (maybeSkip()) return;
+
+				const tableName = `ucopy_missing_tgt_${runId}_${testId}`;
+				const Users = table(tableName, {
+					id: stringId().db.primary(),
+					oldName: z.string(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", oldName: "Alice"});
+
+				// Try to copy to non-existent column "newName" (not in schema)
+				await expect(
+					db.copyColumn(Users, "oldName", "newName")
+				).rejects.toThrow(/does not exist in table/);
+			});
+
 	});
 
 		describe("identifier edge cases", () => {

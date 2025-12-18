@@ -443,6 +443,11 @@ export interface Driver {
 		fromField: string,
 		toField: string,
 	): Promise<number>;
+
+	/** Optional introspection: list columns for a table (name, type, nullability). */
+	getColumns?(
+		tableName: string,
+	): Promise<{name: string; type?: string; notnull?: boolean}[]>;
 }
 
 // ============================================================================
@@ -3068,6 +3073,16 @@ export class Database extends EventTarget {
 		const doCopy = async (): Promise<number> => {
 			const tableName = table.name;
 
+			// Validate fromField exists in actual database table
+			// (it may not be in the schema if it's a legacy column being migrated away)
+			const columnExists = await this.#checkColumnExists(tableName, fromField);
+			if (!columnExists) {
+				throw new EnsureError(
+					`Source field "${fromField}" does not exist in table "${tableName}"`,
+					{operation: "copyColumn", table: tableName, step: 0},
+				);
+			}
+
 			try {
 				// UPDATE <table> SET <toField> = <fromField> WHERE <toField> IS NULL
 				const updateStrings = makeTemplate([
@@ -3099,6 +3114,45 @@ export class Database extends EventTarget {
 			return await this.#driver.withMigrationLock(doCopy);
 		}
 		return await doCopy();
+	}
+
+	/**
+	 * Check if a column exists in the actual database table.
+	 * Queries the actual table structure to verify column existence.
+	 */
+	async #checkColumnExists(tableName: string, columnName: string): Promise<boolean> {
+		// Use driver's getColumns if available
+		if (this.#driver.getColumns) {
+			const columns = await this.#driver.getColumns(tableName);
+			return columns.some((col) => col.name === columnName);
+		}
+
+		// Try PRAGMA table_info first (SQLite)
+		try {
+			const pragmaStrings = makeTemplate(["PRAGMA table_info(", ")"]);
+			const pragmaValues = [ident(tableName)];
+			const columns = await this.#driver.all<{name: string}>(pragmaStrings, pragmaValues);
+			if (columns.length > 0) {
+				return columns.some((col) => col.name === columnName);
+			}
+		} catch {
+			// Not SQLite, try information_schema
+		}
+
+		// Fallback: information_schema (PostgreSQL/MySQL)
+		try {
+			const schemaStrings = makeTemplate([
+				"SELECT column_name FROM information_schema.columns WHERE table_name = ",
+				" AND column_name = ",
+				" LIMIT 1",
+			]);
+			const schemaValues = [tableName, columnName];
+			const result = await this.#driver.all(schemaStrings, schemaValues);
+			return result.length > 0;
+		} catch {
+			// Last resort: assume column exists and let the UPDATE fail naturally
+			return true;
+		}
 	}
 
 	// ==========================================================================

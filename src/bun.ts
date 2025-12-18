@@ -564,6 +564,16 @@ export default class BunDriver implements Driver {
 		}
 	}
 
+	/**
+	 * Optional introspection: list columns for a table.
+	 * Exposed for Database-level helpers that need column existence checks.
+	 */
+	async getColumns(
+		tableName: string,
+	): Promise<{name: string; type?: string; notnull?: boolean}[]> {
+		return await this.#getColumns(tableName);
+	}
+
 	// ==========================================================================
 	// Introspection Helpers (private)
 	// ==========================================================================
