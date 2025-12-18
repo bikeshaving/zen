@@ -865,7 +865,9 @@ export default class BunDriver implements Driver {
 	): Promise<void> {
 		const uniqueKw = unique ? "UNIQUE " : "";
 		const colList = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
-		const sql = `CREATE ${uniqueKw}INDEX IF NOT EXISTS ${quoteIdent(indexName, this.#dialect)} ON ${quoteIdent(tableName, this.#dialect)} (${colList})`;
+		// MySQL doesn't support IF NOT EXISTS for CREATE INDEX
+		const ifNotExists = this.#dialect === "mysql" ? "" : "IF NOT EXISTS ";
+		const sql = `CREATE ${uniqueKw}INDEX ${ifNotExists}${quoteIdent(indexName, this.#dialect)} ON ${quoteIdent(tableName, this.#dialect)} (${colList})`;
 		await this.#sql.unsafe(sql, []);
 	}
 
@@ -999,12 +1001,13 @@ export default class BunDriver implements Driver {
 
 	async #preflightUnique(tableName: string, columns: string[]): Promise<void> {
 		const colList = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
-		const sql = `SELECT ${colList}, COUNT(*) as cnt FROM ${quoteIdent(tableName, this.#dialect)} GROUP BY ${colList} HAVING cnt > 1 LIMIT 1`;
+		// Use COUNT(*) > 1 directly in HAVING (PostgreSQL doesn't allow aliases in HAVING)
+		const sql = `SELECT ${colList}, COUNT(*) as cnt FROM ${quoteIdent(tableName, this.#dialect)} GROUP BY ${colList} HAVING COUNT(*) > 1 LIMIT 1`;
 
 		const result = await this.#sql.unsafe(sql, []);
 
 		if (result.length > 0) {
-			const diagQuery = `SELECT ${columns.join(", ")}, COUNT(*) as cnt FROM ${tableName} GROUP BY ${columns.join(", ")} HAVING cnt > 1`;
+			const diagQuery = `SELECT ${columns.join(", ")}, COUNT(*) as cnt FROM ${tableName} GROUP BY ${columns.join(", ")} HAVING COUNT(*) > 1`;
 
 			// Count total duplicates
 			const countSql = `SELECT COUNT(*) as total FROM (${sql.replace(" LIMIT 1", "")}) t`;

@@ -7,7 +7,7 @@
  * - MySQL: Runs if available (docker compose up)
  */
 
-import {describe, it, expect, beforeEach, afterAll, beforeAll} from "bun:test";
+import {describe, it, expect, afterAll, beforeAll} from "bun:test";
 import {Database, table, z} from "../zen.js";
 import BunDriver from "../bun.js";
 
@@ -19,22 +19,29 @@ interface TestDialect {
 	name: string;
 	url: string;
 	available: boolean;
-	driver?: BunDriver;
 }
 
 const dialects: TestDialect[] = [
 	{name: "sqlite", url: ":memory:", available: true},
 	{
 		name: "postgresql",
-		url: "postgres://zealot:zealot@localhost:5432/zealot_test",
+		url: "postgres://zealot:zealot@localhost:15432/zealot_test",
 		available: false,
 	},
 	{
 		name: "mysql",
-		url: "mysql://zealot:zealot@localhost:3306/zealot_test",
+		url: "mysql://zealot:zealot@localhost:13306/zealot_test",
 		available: false,
 	},
 ];
+
+// Helper for string IDs - MySQL requires VARCHAR (not TEXT) for indexed columns
+// Using max(255) generates VARCHAR(255) instead of TEXT
+const stringId = () => z.string().max(255);
+const stringField = () => z.string().max(255);
+
+// Unique run ID to avoid table name conflicts across test runs
+const runId = Date.now().toString(36);
 
 // Check which databases are available before running tests
 beforeAll(async () => {
@@ -43,13 +50,11 @@ beforeAll(async () => {
 
 		try {
 			const driver = new BunDriver(dialect.url);
-			// Try a simple query to verify connection
 			const strings = ["SELECT 1 as test"] as unknown as TemplateStringsArray;
 			await driver.all(strings, []);
 			dialect.available = true;
-			dialect.driver = driver;
+			await driver.close();
 		} catch {
-			// Database not available, will skip tests
 			dialect.available = false;
 		}
 	}
@@ -57,90 +62,69 @@ beforeAll(async () => {
 	const available = dialects.filter((d) => d.available).map((d) => d.name);
 	const skipped = dialects.filter((d) => !d.available).map((d) => d.name);
 
+	console.log(
+		`\n  Dialects: ${available.join(", ")}${skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""}`,
+	);
 	if (skipped.length > 0) {
-		console.log(`\n  Dialects available: ${available.join(", ")}`);
-		console.log(`  Dialects skipped (not running): ${skipped.join(", ")}`);
 		console.log(`  Run 'docker compose up -d' to test all dialects\n`);
 	}
 });
 
-afterAll(async () => {
-	// Close any open connections
-	for (const dialect of dialects) {
-		if (dialect.driver) {
-			await dialect.driver.close();
-		}
-	}
-});
-
 // =============================================================================
-// Helper to run tests for each available dialect
+// Helper to create a fresh database for each test
 // =============================================================================
 
-function describeDialect(
-	dialectName: string,
-	fn: (getDb: () => Promise<{driver: BunDriver; db: Database}>) => void,
-) {
-	const dialect = dialects.find((d) => d.name === dialectName)!;
-
-	describe(`[${dialectName}]`, () => {
-		if (!dialect.available && dialectName !== "sqlite") {
-			it.skip("database not available", () => {});
-			return;
-		}
-
-		let driver: BunDriver;
-		let db: Database;
-
-		const getDb = async () => {
-			if (dialectName === "sqlite") {
-				// Fresh in-memory database for each call
-				driver = new BunDriver(":memory:");
-				db = new Database(driver);
-				await db.open(1);
-			} else {
-				// Reuse connection but with unique table names
-				if (!driver) {
-					driver = new BunDriver(dialect.url);
-					db = new Database(driver);
-					await db.open(1);
-				}
-			}
-			return {driver, db};
-		};
-
-		fn(getDb);
-	});
+async function createTestDb(
+	dialect: TestDialect,
+): Promise<{driver: BunDriver; db: Database}> {
+	const driver = new BunDriver(dialect.url);
+	const db = new Database(driver);
+	await db.open(1);
+	return {driver, db};
 }
 
 // =============================================================================
-// Tests for each dialect
+// Test definitions for each dialect
 // =============================================================================
 
-for (const dialectConfig of dialects) {
-	describeDialect(dialectConfig.name, (getDb) => {
+for (const dialect of dialects) {
+	describe(`[${dialect.name}]`, () => {
+		// Track test ID for unique table names (needed for persistent DBs)
+		let testId = 0;
+
+		// Cleanup drivers after each dialect's tests
+		const drivers: BunDriver[] = [];
+		afterAll(async () => {
+			for (const d of drivers) {
+				await d.close();
+			}
+		});
+
+		// Helper to skip if dialect unavailable
+		const maybeSkip = () => {
+			if (!dialect.available) {
+				return true;
+			}
+			return false;
+		};
+
 		describe("ensureTable", () => {
-			let db: Database;
-			let testId = 0;
-
-			beforeEach(async () => {
-				const result = await getDb();
-				db = result.db;
-				testId++;
-			});
-
 			it("creates a new table with all columns", async () => {
-				const Users = table(`users_${testId}`, {
-					id: z.string().db.primary(),
-					name: z.string(),
-					email: z.string(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`u_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					email: stringField(),
 				});
 
 				const result = await db.ensureTable(Users);
-
 				expect(result.applied).toBe(true);
 
-				// Verify table was created by inserting a row
 				const user = await db.insert(Users, {
 					id: "1",
 					name: "Alice",
@@ -150,81 +134,97 @@ for (const dialectConfig of dialects) {
 			});
 
 			it("creates a table with primary key", async () => {
-				const Users = table(`users_pk_${testId}`, {
-					id: z.string().db.primary(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`upk_${runId}_${testId}`, {
+					id: stringId().db.primary(),
 					name: z.string(),
 				});
 
 				await db.ensureTable(Users);
-
-				// Insert should work
 				await db.insert(Users, {id: "1", name: "Alice"});
 
-				// Duplicate primary key should fail
 				await expect(
 					db.insert(Users, {id: "1", name: "Bob"}),
 				).rejects.toThrow();
 			});
 
 			it("creates a table with indexes", async () => {
-				const Users = table(`users_idx_${testId}`, {
-					id: z.string().db.primary(),
-					email: z.string().db.index(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`uidx_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					email: stringField().db.index(),
 				});
 
 				const result = await db.ensureTable(Users);
-
 				expect(result.applied).toBe(true);
 
-				// Verify index exists by checking performance characteristics
-				// (or we could query sqlite_master)
 				await db.insert(Users, {id: "1", email: "alice@example.com"});
 			});
 
 			it("creates a table with unique constraint", async () => {
-				const Users = table(`users_uniq_${testId}`, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`uuniq_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
 				await db.ensureTable(Users);
-
 				await db.insert(Users, {id: "1", email: "alice@example.com"});
 
-				// Duplicate email should fail
 				await expect(
 					db.insert(Users, {id: "2", email: "alice@example.com"}),
 				).rejects.toThrow();
 			});
 
 			it("creates a table with foreign key", async () => {
-				const Users = table(`users_fk_${testId}`, {
-					id: z.string().db.primary(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`ufk_${runId}_${testId}`, {
+					id: stringId().db.primary(),
 					name: z.string(),
 				});
 
-				const Posts = table(`posts_fk_${testId}`, {
-					id: z.string().db.primary(),
-					authorId: z.string().db.references(Users, {as: "author"}),
+				const Posts = table(`pfk_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					authorId: stringField().db.references(Users, {as: "author"}),
 					title: z.string(),
 				});
 
-				// Create Users first (FK dependency)
 				await db.ensureTable(Users);
 				await db.ensureTable(Posts);
 
-				// Insert user
 				await db.insert(Users, {id: "1", name: "Alice"});
-
-				// Insert post with valid author
 				await db.insert(Posts, {id: "1", authorId: "1", title: "Hello"});
-
-				// Note: FK enforcement varies by dialect/config
 			});
 
 			it("is idempotent - calling twice does nothing", async () => {
-				const Users = table(`users_idemp_${testId}`, {
-					id: z.string().db.primary(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`uidem_${runId}_${testId}`, {
+					id: stringId().db.primary(),
 					name: z.string(),
 				});
 
@@ -236,46 +236,53 @@ for (const dialectConfig of dialects) {
 			});
 
 			it("adds missing columns to existing table", async () => {
-				// Create initial table with just id
-				const tableName = `users_evolve_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `uevol_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
+					id: stringId().db.primary(),
 				});
 
 				await db.ensureTable(UsersV1);
 				await db.insert(UsersV1, {id: "1"});
 
-				// Evolve schema to add email column
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string().optional(),
+					id: stringId().db.primary(),
+					email: stringField().optional(),
 				});
 
 				const result = await db.ensureTable(UsersV2);
 				expect(result.applied).toBe(true);
 
-				// Insert with new column should work
 				await db.insert(UsersV2, {id: "2", email: "bob@example.com"});
 
-				// Old row should still be readable
 				const user = await db.get(UsersV2, "1");
 				expect(user).toBeDefined();
 				expect(user!.id).toBe("1");
 			});
 
 			it("adds missing non-unique indexes to existing table", async () => {
-				const tableName = `users_addidx_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `uaddidx_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 				});
 
 				await db.ensureTable(UsersV1);
 
-				// Add index
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string().db.index(),
+					id: stringId().db.primary(),
+					email: stringField().db.index(),
 				});
 
 				const result = await db.ensureTable(UsersV2);
@@ -283,19 +290,23 @@ for (const dialectConfig of dialects) {
 			});
 
 			it("throws SchemaDriftError when existing table missing unique constraint", async () => {
-				// Create table without unique constraint
-				const tableName = `users_drift_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `udrift_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 				});
 
 				await db.ensureTable(UsersV1);
 
-				// Try to ensure with unique constraint
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
 				await expect(db.ensureTable(UsersV2)).rejects.toMatchObject({
@@ -306,59 +317,55 @@ for (const dialectConfig of dialects) {
 		});
 
 		describe("ensureConstraints", () => {
-			let db: Database;
-			let testId = 0;
-
-			beforeEach(async () => {
-				const result = await getDb();
-				db = result.db;
-				testId++;
-			});
-
 			it("adds unique constraint to existing table", async () => {
-				// Create table without unique constraint
-				const tableName = `users_adduniq_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `uadduniq_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 				});
 
 				await db.ensureTable(UsersV1);
 				await db.insert(UsersV1, {id: "1", email: "alice@example.com"});
 
-				// Schema with unique constraint
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
-				// This should work since there are no duplicates
 				const result = await db.ensureConstraints(UsersV2);
 				expect(result.applied).toBe(true);
 
-				// Now duplicate should fail
 				await expect(
 					db.insert(UsersV2, {id: "2", email: "alice@example.com"}),
 				).rejects.toThrow();
 			});
 
 			it("throws ConstraintPreflightError when duplicates exist", async () => {
-				const tableName = `users_dups_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `udups_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 				});
 
 				await db.ensureTable(UsersV1);
-
-				// Insert duplicate emails
 				await db.insert(UsersV1, {id: "1", email: "same@example.com"});
 				await db.insert(UsersV1, {id: "2", email: "same@example.com"});
 
-				// Schema with unique constraint
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
 				await expect(db.ensureConstraints(UsersV2)).rejects.toMatchObject({
@@ -368,23 +375,33 @@ for (const dialectConfig of dialects) {
 			});
 
 			it("is idempotent when constraints already exist", async () => {
-				const Users = table(`users_constidemp_${testId}`, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`uconst_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
-				// Create table with constraint
 				await db.ensureTable(Users);
 
-				// ensureConstraints should be a no-op
 				const result = await db.ensureConstraints(Users);
 				expect(result.applied).toBe(false);
 			});
 
 			it("throws when table does not exist", async () => {
-				const Users = table(`nonexistent_${testId}`, {
-					id: z.string().db.primary(),
-					email: z.string().db.unique(),
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const Users = table(`nonex_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					email: stringField().db.unique(),
 				});
 
 				await expect(db.ensureConstraints(Users)).rejects.toThrow(
@@ -394,49 +411,48 @@ for (const dialectConfig of dialects) {
 		});
 
 		describe("copyColumn", () => {
-			let db: Database;
-			let testId = 0;
-
-			beforeEach(async () => {
-				const result = await getDb();
-				db = result.db;
-				testId++;
-			});
-
 			it("copies data from old column to new column", async () => {
-				// Create table with old column name
-				const tableName = `users_copy_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `ucopy_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 				});
 
 				await db.ensureTable(UsersV1);
 				await db.insert(UsersV1, {id: "1", email: "alice@example.com"});
 				await db.insert(UsersV1, {id: "2", email: "bob@example.com"});
 
-				// Add new column
 				const UsersV2 = table(tableName, {
-					id: z.string().db.primary(),
-					email: z.string(),
+					id: stringId().db.primary(),
+					email: stringField(),
 					emailAddress: z.string().optional(),
 				});
 
 				await db.ensureTable(UsersV2);
 
-				// Copy data
 				const updated = await db.copyColumn(UsersV2, "email", "emailAddress");
 				expect(updated).toBe(2);
 
-				// Verify data was copied
 				const user = await db.get(UsersV2, "1");
 				expect(user?.emailAddress).toBe("alice@example.com");
 			});
 
 			it("is idempotent - only copies where target is NULL", async () => {
-				const tableName = `users_copyidemp_${testId}`;
+				if (maybeSkip()) return;
+				testId++;
+
+				const {driver, db} = await createTestDb(dialect);
+				drivers.push(driver);
+
+				const tableName = `ucopyid_${runId}_${testId}`;
 				const Users = table(tableName, {
-					id: z.string().db.primary(),
+					id: stringId().db.primary(),
 					oldName: z.string(),
 					newName: z.string().nullable(),
 				});
@@ -445,11 +461,9 @@ for (const dialectConfig of dialects) {
 				await db.insert(Users, {id: "1", oldName: "Alice", newName: null});
 				await db.insert(Users, {id: "2", oldName: "Bob", newName: "Robert"});
 
-				// First copy
 				const updated1 = await db.copyColumn(Users, "oldName", "newName");
-				expect(updated1).toBe(1); // Only row 1 updated
+				expect(updated1).toBe(1);
 
-				// Second copy should be no-op
 				const updated2 = await db.copyColumn(Users, "oldName", "newName");
 				expect(updated2).toBe(0);
 			});

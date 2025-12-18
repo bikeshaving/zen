@@ -1908,11 +1908,11 @@ export class Database extends EventTarget {
 	// ==========================================================================
 
 	async #ensureMigrationsTable(): Promise<void> {
-		// Use TEXT for timestamp - works across all databases
+		// Simple migrations table - just tracks versions
+		// No applied_at default (MySQL doesn't support DEFAULT CURRENT_TIMESTAMP on TEXT)
 		const createTable = makeTemplate([
 			`CREATE TABLE IF NOT EXISTS _migrations (
-				version INTEGER PRIMARY KEY,
-				applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+				version INTEGER PRIMARY KEY
 			)`,
 		]);
 		await this.#driver.run(createTable, []);

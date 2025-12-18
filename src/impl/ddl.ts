@@ -262,8 +262,11 @@ export function generateDDL<T extends Table<any>>(
 	const values: unknown[] = [];
 
 	// Start: CREATE TABLE [IF NOT EXISTS] ${tableName} (
-	const exists = ifNotExists ? "IF NOT EXISTS " : "";
-	strings.push(`CREATE TABLE ${exists}`);
+	const tableExists = ifNotExists ? "IF NOT EXISTS " : "";
+	// MySQL doesn't support IF NOT EXISTS for CREATE INDEX
+	const indexExists =
+		ifNotExists && dialect !== "mysql" ? "IF NOT EXISTS " : "";
+	strings.push(`CREATE TABLE ${tableExists}`);
 	values.push(ident(table.name));
 	strings.push(" (\n  ");
 
@@ -421,7 +424,7 @@ export function generateDDL<T extends Table<any>>(
 	// Add indexes for indexed fields
 	for (const indexedField of meta.indexed) {
 		const indexName = `idx_${table.name}_${indexedField}`;
-		strings[strings.length - 1] += `\n\nCREATE INDEX ${exists}`;
+		strings[strings.length - 1] += `\n\nCREATE INDEX ${indexExists}`;
 		values.push(ident(indexName));
 		strings.push(" ON ");
 		values.push(ident(table.name));
@@ -433,7 +436,7 @@ export function generateDDL<T extends Table<any>>(
 	// Add compound indexes
 	for (const indexCols of table.indexes) {
 		const indexName = `idx_${table.name}_${indexCols.join("_")}`;
-		strings[strings.length - 1] += `\n\nCREATE INDEX ${exists}`;
+		strings[strings.length - 1] += `\n\nCREATE INDEX ${indexExists}`;
 		values.push(ident(indexName));
 		strings.push(" ON ");
 		values.push(ident(table.name));

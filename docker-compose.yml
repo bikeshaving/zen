@@ -10,7 +10,8 @@ services:
       POSTGRES_PASSWORD: zealot
       POSTGRES_DB: zealot_test
     ports:
-      - "5432:5432"
+      - "15432:5432"
+    command: postgres -c max_connections=200
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zealot -d zealot_test"]
       interval: 2s
@@ -25,7 +26,7 @@ services:
       MYSQL_PASSWORD: zealot
       MYSQL_DATABASE: zealot_test
     ports:
-      - "3306:3306"
+      - "13306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uzealot", "-pzealot"]
       interval: 2s
