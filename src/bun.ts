@@ -923,7 +923,8 @@ export default class BunDriver implements Driver {
 					c.type === "foreign_key" &&
 					c.columns.length === 1 &&
 					c.columns[0] === ref.fieldName &&
-					c.referencedTable === ref.table.name,
+					c.referencedTable === ref.table.name &&
+					c.referencedColumns?.[0] === ref.referencedField,
 			);
 			if (!hasFk) {
 				throw new SchemaDriftError(
@@ -944,8 +945,10 @@ export default class BunDriver implements Driver {
 				if (c.type !== "foreign_key") return false;
 				if (c.columns.length !== ref.fields.length) return false;
 				if (c.referencedTable !== ref.table.name) return false;
-				// Check all columns match (order matters)
-				return ref.fields.every((field, i) => c.columns[i] === field);
+				// Check all local columns match (order matters)
+				if (!ref.fields.every((field, i) => c.columns[i] === field)) return false;
+				// Check all referenced columns match (order matters)
+				return refFields.every((field, i) => c.referencedColumns?.[i] === field);
 			});
 			if (!hasFk) {
 				throw new SchemaDriftError(
@@ -1010,7 +1013,8 @@ export default class BunDriver implements Driver {
 					c.type === "foreign_key" &&
 					c.columns.length === 1 &&
 					c.columns[0] === ref.fieldName &&
-					c.referencedTable === ref.table.name,
+					c.referencedTable === ref.table.name &&
+					c.referencedColumns?.[0] === ref.referencedField,
 			);
 
 			if (!hasFk) {
@@ -1056,8 +1060,10 @@ export default class BunDriver implements Driver {
 				if (c.type !== "foreign_key") return false;
 				if (c.columns.length !== ref.fields.length) return false;
 				if (c.referencedTable !== ref.table.name) return false;
-				// Check all columns match (order matters)
-				return ref.fields.every((field, i) => c.columns[i] === field);
+				// Check all local columns match (order matters)
+				if (!ref.fields.every((field, i) => c.columns[i] === field)) return false;
+				// Check all referenced columns match (order matters)
+				return refFields.every((field, i) => c.referencedColumns?.[i] === field);
 			});
 
 			if (!hasFk) {
