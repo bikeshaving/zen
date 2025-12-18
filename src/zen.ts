@@ -13,70 +13,59 @@ extendZod(zod);
 // Re-export extended zod
 export {zod as z};
 
+// ============================================================================
+// Table Definition
+// ============================================================================
+
 export {
-	// Table definition
 	table,
-	isTable,
 	type Table,
-	type PartialTable,
-	type DerivedTable,
 	type TableOptions,
-	type ReferenceInfo,
-	type CompoundReference,
-
-	// Zod extension (for advanced use cases)
-	extendZod,
-
-	// Custom field helpers
-	setDBMeta,
-	getDBMeta,
-
-	// Field metadata
-	type FieldMeta,
-	type FieldType,
-	type FieldDbMeta,
-
-	// Type inference
 	type Infer,
 	type Insert,
-	type FullTableOnly,
-
-	// Fragment method types
-	type SetValues,
+	type FieldMeta,
+	type FieldType,
 } from "./impl/table.js";
 
-export {
-	// SQL dialect (for test utilities and DDL)
-	type SQLDialect,
-	// SQL fragments
-	type SQLFragment,
-	// DDL fragments
-	type DDLFragment,
-} from "./impl/query.js";
+// ============================================================================
+// Database
+// ============================================================================
 
 export {
-	// SQL identifiers (table/column names quoted by drivers)
-	ident,
-	isSQLIdentifier,
-	type SQLIdentifier,
-} from "./impl/template.js";
-
-export {
-	// Database wrapper
 	Database,
 	Transaction,
 	DatabaseUpgradeEvent,
 	type Driver,
-	type TaggedQuery,
+} from "./impl/database.js";
 
-	// SQL symbols (dialect-aware expressions resolved at query time)
+// ============================================================================
+// SQL Primitives (for drivers and custom queries)
+// ============================================================================
+
+export {
+	// SQL symbols
 	NOW,
 	isSQLSymbol,
-	type SQLSymbol,
 } from "./impl/database.js";
 
 export {
-	// Errors
+	// SQL identifiers
+	ident,
+	isSQLIdentifier,
+} from "./impl/template.js";
+
+export {
+	// SQL fragments (return types of table methods like deleted(), set(), etc.)
+	// TODO: These should probably be TemplateTuple instead
+	type SQLFragment,
+	type DDLFragment,
+} from "./impl/query.js";
+
+// ============================================================================
+// Errors
+// ============================================================================
+
+export {
 	ZealotError,
 	ValidationError,
 	TableDefinitionError,
