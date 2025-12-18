@@ -936,6 +936,28 @@ export default class BunDriver implements Driver {
 				);
 			}
 		}
+
+		// Check for missing compound foreign keys
+		for (const ref of table.compoundReferences) {
+			const refFields = ref.referencedFields ?? ref.fields;
+			const hasFk = existingConstraints.some((c) => {
+				if (c.type !== "foreign_key") return false;
+				if (c.columns.length !== ref.fields.length) return false;
+				if (c.referencedTable !== ref.table.name) return false;
+				// Check all columns match (order matters)
+				return ref.fields.every((field, i) => c.columns[i] === field);
+			});
+			if (!hasFk) {
+				throw new SchemaDriftError(
+					`Table "${table.name}" is missing compound FOREIGN KEY on columns (${ref.fields.join(", ")}) referencing "${ref.table.name}"`,
+					{
+						table: table.name,
+						drift: `missing fk:(${ref.fields.join(",")}) ->${ref.table.name}`,
+						suggestion: `Run db.ensureConstraints(${table.name}) to apply constraints`,
+					},
+				);
+			}
+		}
 	}
 
 	async #ensureUniqueConstraints<T extends Table<any>>(
@@ -1027,6 +1049,59 @@ export default class BunDriver implements Driver {
 			}
 		}
 
+		// Handle compound foreign keys
+		for (const ref of table.compoundReferences) {
+			const refFields = ref.referencedFields ?? ref.fields;
+			const hasFk = existingConstraints.some((c) => {
+				if (c.type !== "foreign_key") return false;
+				if (c.columns.length !== ref.fields.length) return false;
+				if (c.referencedTable !== ref.table.name) return false;
+				// Check all columns match (order matters)
+				return ref.fields.every((field, i) => c.columns[i] === field);
+			});
+
+			if (!hasFk) {
+				// Preflight: check for orphans
+				await this.#preflightCompoundForeignKey(
+					table.name,
+					ref.fields,
+					ref.table.name,
+					refFields,
+				);
+
+				// Add compound FK constraint (SQLite requires table rebuild, not supported here)
+				if (this.#dialect === "sqlite") {
+					throw new Error(
+						`Adding foreign key constraints to existing SQLite tables requires table rebuild. ` +
+							`Table "${table.name}" columns (${ref.fields.join(", ")}) -> "${ref.table.name}".(${refFields.join(", ")}). ` +
+							`Please use a manual migration.`,
+					);
+				}
+
+				// PostgreSQL and MySQL support ALTER TABLE ADD CONSTRAINT
+				const constraintName = `${table.name}_${ref.fields.join("_")}_fkey`;
+				const onDelete = ref.onDelete
+					? ` ON DELETE ${ref.onDelete.toUpperCase().replace(" ", " ")}`
+					: "";
+
+				const localCols = ref.fields
+					.map((f) => quoteIdent(f, this.#dialect))
+					.join(", ");
+				const refCols = refFields
+					.map((f) => quoteIdent(f, this.#dialect))
+					.join(", ");
+
+				const sql =
+					`ALTER TABLE ${quoteIdent(table.name, this.#dialect)} ` +
+					`ADD CONSTRAINT ${quoteIdent(constraintName, this.#dialect)} ` +
+					`FOREIGN KEY (${localCols}) ` +
+					`REFERENCES ${quoteIdent(ref.table.name, this.#dialect)}(${refCols})${onDelete}`;
+
+				await this.#sql.unsafe(sql, []);
+				applied = true;
+			}
+		}
+
 		return applied;
 	}
 
@@ -1073,7 +1148,7 @@ export default class BunDriver implements Driver {
 		const result = await this.#sql.unsafe(sql, []);
 
 		if (result.length > 0) {
-			const diagQuery = `SELECT t.* FROM ${tableName} t WHERE t.${column} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${refTable} r WHERE r.${refColumn} = t.${column})`;
+			const diagQuery = `SELECT t.* FROM ${quoteIdent(tableName, this.#dialect)} t WHERE t.${quoteIdent(column, this.#dialect)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r WHERE r.${quoteIdent(refColumn, this.#dialect)} = t.${quoteIdent(column, this.#dialect)})`;
 
 			// Count orphans
 			const countSql = sql
@@ -1090,6 +1165,60 @@ export default class BunDriver implements Driver {
 				{
 					table: tableName,
 					constraint: `fk:${column}->${refTable}.${refColumn}`,
+					violationCount,
+					query: diagQuery,
+				},
+			);
+		}
+	}
+
+	async #preflightCompoundForeignKey(
+		tableName: string,
+		columns: string[],
+		refTable: string,
+		refColumns: string[],
+	): Promise<void> {
+		// Build WHERE conditions for matching
+		const joinConditions = columns
+			.map(
+				(col, i) =>
+					`r.${quoteIdent(refColumns[i], this.#dialect)} = t.${quoteIdent(col, this.#dialect)}`,
+			)
+			.join(" AND ");
+
+		// Check for NULL in any of the columns (skip those rows)
+		const nullChecks = columns
+			.map((col) => `t.${quoteIdent(col, this.#dialect)} IS NOT NULL`)
+			.join(" AND ");
+
+		const sql = `SELECT 1 FROM ${quoteIdent(tableName, this.#dialect)} t
+			WHERE ${nullChecks}
+			AND NOT EXISTS (
+				SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r
+				WHERE ${joinConditions}
+			) LIMIT 1`;
+
+		const result = await this.#sql.unsafe(sql, []);
+
+		if (result.length > 0) {
+			const quotedCols = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
+			const diagQuery = `SELECT t.* FROM ${quoteIdent(tableName, this.#dialect)} t WHERE ${nullChecks} AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r WHERE ${joinConditions})`;
+
+			// Count orphans
+			const countSql = sql
+				.replace("SELECT 1", "SELECT COUNT(*)")
+				.replace(" LIMIT 1", "");
+			const countResult = await this.#sql.unsafe(countSql, []);
+			const violationCount =
+				(countResult[0] as any)?.["COUNT(*)"] ??
+				(countResult[0] as any)?.count ??
+				1;
+
+			throw new ConstraintPreflightError(
+				`Cannot add compound FOREIGN KEY on "${tableName}".(${columns.join(", ")}) -> "${refTable}".(${refColumns.join(", ")}): orphan records exist`,
+				{
+					table: tableName,
+					constraint: `fk:(${columns.join(",")}) ->${refTable}.(${refColumns.join(",")})`,
 					violationCount,
 					query: diagQuery,
 				},
