@@ -1000,14 +1000,30 @@ export default class BunDriver implements Driver {
 					ref.referencedField,
 				);
 
-				// Note: Adding FK to existing table is complex and dialect-specific
-				// SQLite requires table rebuild, Postgres/MySQL can ALTER TABLE
-				// For now, throw an error directing users to manual migration
+
+			// Add FK constraint (SQLite requires table rebuild, not supported here)
+			if (this.#dialect === "sqlite") {
 				throw new Error(
-					`Adding foreign key constraints to existing tables is not yet supported. ` +
+					`Adding foreign key constraints to existing SQLite tables requires table rebuild. ` +
 						`Table "${table.name}" column "${ref.fieldName}" -> "${ref.table.name}"."${ref.referencedField}". ` +
 						`Please use a manual migration.`,
 				);
+			}
+
+			// PostgreSQL and MySQL support ALTER TABLE ADD CONSTRAINT
+			const constraintName = `${table.name}_${ref.fieldName}_fkey`;
+			const onDelete = ref.onDelete
+				? ` ON DELETE ${ref.onDelete.toUpperCase().replace(" ", " ")}`
+				: "";
+
+			const sql =
+				`ALTER TABLE ${quoteIdent(table.name, this.#dialect)} ` +
+				`ADD CONSTRAINT ${quoteIdent(constraintName, this.#dialect)} ` +
+				`FOREIGN KEY (${quoteIdent(ref.fieldName, this.#dialect)}) ` +
+				`REFERENCES ${quoteIdent(ref.table.name, this.#dialect)}(${quoteIdent(ref.referencedField, this.#dialect)})${onDelete}`;
+
+			await this.#sql.unsafe(sql, []);
+			applied = true;
 			}
 		}
 

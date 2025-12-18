@@ -7,8 +7,8 @@
  * - MySQL: Runs if available (docker compose up)
  */
 
-import {describe, it, expect, afterAll, beforeAll} from "bun:test";
-import {Database, table, z} from "../zen.js";
+import {describe, it, expect, afterAll, beforeAll, beforeEach} from "bun:test";
+import {Database, table, z, ident, ConstraintPreflightError} from "../zen.js";
 import BunDriver from "../bun.js";
 
 // =============================================================================
@@ -89,32 +89,37 @@ async function createTestDb(
 
 for (const dialect of dialects) {
 	describe(`[${dialect.name}]`, () => {
-		// Track test ID for unique table names (needed for persistent DBs)
 		let testId = 0;
+		let driver: BunDriver;
+		let db: Database;
 
-		// Cleanup drivers after each dialect's tests
-		const drivers: BunDriver[] = [];
+		beforeEach(async () => {
+			if (!dialect.available) return;
+
+			// Close previous driver if exists
+			if (driver) {
+				await driver.close();
+			}
+
+			// Create fresh driver and db for each test
+			driver = new BunDriver(dialect.url);
+			db = new Database(driver);
+			await db.open(1);
+			testId++;
+		});
+
 		afterAll(async () => {
-			for (const d of drivers) {
-				await d.close();
+			if (driver) {
+				await driver.close();
 			}
 		});
 
-		// Helper to skip if dialect unavailable
-		const maybeSkip = () => {
-			if (!dialect.available) {
-				return true;
-			}
-			return false;
-		};
+		const maybeSkip = () => !dialect.available;
 
 		describe("ensureTable", () => {
 			it("creates a new table with all columns", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`u_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -135,10 +140,7 @@ for (const dialect of dialects) {
 
 			it("creates a table with primary key", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`upk_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -155,10 +157,7 @@ for (const dialect of dialects) {
 
 			it("creates a table with indexes", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`uidx_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -173,10 +172,7 @@ for (const dialect of dialects) {
 
 			it("creates a table with unique constraint", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`uuniq_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -193,10 +189,7 @@ for (const dialect of dialects) {
 
 			it("creates a table with foreign key", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`ufk_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -218,10 +211,7 @@ for (const dialect of dialects) {
 
 			it("is idempotent - calling twice does nothing", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`uidem_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -237,10 +227,7 @@ for (const dialect of dialects) {
 
 			it("adds missing columns to existing table", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `uevol_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -267,10 +254,7 @@ for (const dialect of dialects) {
 
 			it("adds missing non-unique indexes to existing table", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `uaddidx_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -291,10 +275,7 @@ for (const dialect of dialects) {
 
 			it("throws SchemaDriftError when existing table missing unique constraint", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `udrift_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -319,10 +300,7 @@ for (const dialect of dialects) {
 		describe("ensureConstraints", () => {
 			it("adds unique constraint to existing table", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `uadduniq_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -348,10 +326,7 @@ for (const dialect of dialects) {
 
 			it("throws ConstraintPreflightError when duplicates exist", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `udups_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -376,10 +351,7 @@ for (const dialect of dialects) {
 
 			it("is idempotent when constraints already exist", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`uconst_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -394,10 +366,7 @@ for (const dialect of dialects) {
 
 			it("throws when table does not exist", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const Users = table(`nonex_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -408,15 +377,91 @@ for (const dialect of dialects) {
 					/does not exist/,
 				);
 			});
+
+
+		it("throws ConstraintPreflightError for FK with orphan rows", async () => {
+			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+			if (maybeSkip() || dialect.name === "sqlite") return;
+			testId++;
+
+
+			const Authors = table(`authors_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				name: stringField(),
+			});
+
+			const Posts = table(`posts_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				title: stringField(),
+				authorId: stringId(),
+			});
+
+			await db.ensureTable(Authors);
+			await db.ensureTable(Posts);
+
+			// Insert author
+			await db.insert(Authors, {id: "1", name: "Alice"});
+
+			// Insert post with valid author
+			await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
+
+			// Insert orphan post (author doesn't exist)
+			await db.insert(Posts, {id: "2", title: "Orphan", authorId: "999"});
+
+			// Add FK constraint to Posts referencing Authors
+			const PostsWithFK = table(`posts_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				title: stringField(),
+				authorId: stringId().db.references(Authors, {as: "author"}),
+			});
+
+			await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
+				name: "ConstraintPreflightError",
+			});
+		});
+
+		it("adds FK constraint when no orphan rows exist", async () => {
+			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+			if (maybeSkip() || dialect.name === "sqlite") return;
+			testId++;
+
+
+			const Authors = table(`authors_clean_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				name: stringField(),
+			});
+
+			const Posts = table(`posts_clean_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				title: stringField(),
+				authorId: stringId(),
+			});
+
+			await db.ensureTable(Authors);
+			await db.ensureTable(Posts);
+
+			// Insert author
+			await db.insert(Authors, {id: "1", name: "Alice"});
+
+			// Insert post with valid author only (no orphans)
+			await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
+
+			// Add FK constraint - should succeed
+			const PostsWithFK = table(`posts_clean_${runId}_${testId}`, {
+				id: stringId().db.primary(),
+				title: stringField(),
+				authorId: stringId().db.references(Authors, {as: "author"}),
+			});
+
+			const result = await db.ensureConstraints(PostsWithFK);
+			expect(result.applied).toBe(true);
+		});
 		});
 
 		describe("copyColumn", () => {
 			it("copies data from old column to new column", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `ucopy_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -445,10 +490,7 @@ for (const dialect of dialects) {
 
 			it("is idempotent - only copies where target is NULL", async () => {
 				if (maybeSkip()) return;
-				testId++;
 
-				const {driver, db} = await createTestDb(dialect);
-				drivers.push(driver);
 
 				const tableName = `ucopyid_${runId}_${testId}`;
 				const Users = table(tableName, {
@@ -466,6 +508,127 @@ for (const dialect of dialects) {
 
 				const updated2 = await db.copyColumn(Users, "oldName", "newName");
 				expect(updated2).toBe(0);
+			});
+
+	});
+
+		describe("identifier edge cases", () => {
+			it("handles reserved words as table and column names", async () => {
+				if (maybeSkip()) return;
+
+
+				// Use reserved SQL words as table/column names
+				const Select = table(`select_${runId}_${testId}`, {
+					order: stringId().db.primary(),
+					from: stringField(),
+					where: z.string().optional(),
+				});
+
+				await db.ensureTable(Select);
+
+				const row = await db.insert(Select, {
+					order: "1",
+					from: "test",
+					where: "here",
+				});
+
+				expect(row.order).toBe("1");
+				expect(row.from).toBe("test");
+
+				const found = await db.get(Select, "1");
+				expect(found?.where).toBe("here");
+			});
+
+			it("handles quote characters in identifiers", async () => {
+				if (maybeSkip()) return;
+
+
+				// Names containing quotes/backticks
+				const tableName = `quote_${runId}_${testId}`;
+				const Quotes = table(tableName, {
+					id: stringId().db.primary(),
+					"user's_name": stringField(),
+					'column"with"quotes': z.string().optional(),
+				});
+
+				await db.ensureTable(Quotes);
+
+				const row = await db.insert(Quotes, {
+					id: "1",
+					"user's_name": "Alice",
+					'column"with"quotes': "value",
+				});
+
+				expect(row["user's_name"]).toBe("Alice");
+
+
+				// Verify we can retrieve the row with special characters in field names
+				const found = await db.get(Quotes, "1");
+				expect(found?.["user's_name"]).toBe("Alice");
+				expect(found?.["column\"with\"quotes"]).toBe("value");
+			});
+		});
+
+		describe("placeholder translation", () => {
+			it("translates placeholders correctly for multi-param queries", async () => {
+				if (maybeSkip()) return;
+
+
+				const Users = table(`placeholders_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					age: z.number(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", name: "Alice", age: 30});
+				await db.insert(Users, {id: "2", name: "Bob", age: 25});
+				await db.insert(Users, {id: "3", name: "Charlie", age: 35});
+
+				// Query with multiple parameters - should use $1/$2/$3 for Postgres, ? for MySQL/SQLite
+				const result = await db.query<{name: string; age: number}>`
+					SELECT ${ident("name")}, ${ident("age")}
+					FROM ${ident(Users.name)}
+					WHERE ${ident("age")} >= ${25}
+					AND ${ident("age")} <= ${35}
+					ORDER BY ${ident("age")}
+				`;
+
+				expect(result).toHaveLength(3);
+				expect(result[0].name).toBe("Bob");
+				expect(result[1].name).toBe("Alice");
+				expect(result[2].name).toBe("Charlie");
+			});
+
+			it("handles mixed identifiers and values without misalignment", async () => {
+				if (maybeSkip()) return;
+
+
+				const Products = table(`products_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					category: stringField(),
+					price: z.number(),
+				});
+
+				await db.ensureTable(Products);
+				await db.insert(Products, {id: "1", category: "electronics", price: 100});
+				await db.insert(Products, {id: "2", category: "books", price: 20});
+				await db.insert(Products, {id: "3", category: "electronics", price: 50});
+
+				// Alternate between identifiers and values to test placeholder ordering
+				const result = await db.query<{id: string; price: number}>`
+					SELECT ${ident("id")}, ${ident("price")}
+					FROM ${ident(Products.name)}
+					WHERE ${ident("category")} = ${"electronics"}
+					AND ${ident("price")} > ${40}
+					ORDER BY ${ident("price")} DESC
+				`;
+
+				expect(result).toHaveLength(2);
+				expect(result[0].id).toBe("1");
+				expect(result[0].price).toBe(100);
+				expect(result[1].id).toBe("3");
+				expect(result[1].price).toBe(50);
 			});
 		});
 	});
