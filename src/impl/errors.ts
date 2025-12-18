@@ -1,7 +1,7 @@
 /**
- * Structured error types for Zealot.
+ * Structured error types for database operations.
  *
- * All Zealot errors extend ZealotError, which includes an error code
+ * All database errors extend DatabaseError, which includes an error code
  * for programmatic error handling.
  */
 
@@ -9,7 +9,7 @@
 // Error Codes
 // ============================================================================
 
-export type ZealotErrorCode =
+export type DatabaseErrorCode =
 	| "VALIDATION_ERROR"
 	| "TABLE_DEFINITION_ERROR"
 	| "MIGRATION_ERROR"
@@ -29,16 +29,20 @@ export type ZealotErrorCode =
 // ============================================================================
 
 /**
- * Base error class for all Zealot errors.
+ * Base error class for all database errors.
  *
  * Includes an error code for programmatic handling.
  */
-export class ZealotError extends Error {
-	readonly code: ZealotErrorCode;
+export class DatabaseError extends Error {
+	readonly code: DatabaseErrorCode;
 
-	constructor(code: ZealotErrorCode, message: string, options?: ErrorOptions) {
+	constructor(
+		code: DatabaseErrorCode,
+		message: string,
+		options?: ErrorOptions,
+	) {
 		super(message, options);
-		this.name = "ZealotError";
+		this.name = "DatabaseError";
 		this.code = code;
 
 		// Maintains proper stack trace in V8 environments
@@ -55,7 +59,7 @@ export class ZealotError extends Error {
 /**
  * Thrown when Zod validation fails during insert/update.
  */
-export class ValidationError extends ZealotError {
+export class ValidationError extends DatabaseError {
 	readonly fieldErrors: Record<string, string[]>;
 
 	constructor(
@@ -72,7 +76,7 @@ export class ValidationError extends ZealotError {
 /**
  * Thrown when table definition is invalid (e.g., dots in names).
  */
-export class TableDefinitionError extends ZealotError {
+export class TableDefinitionError extends DatabaseError {
 	readonly tableName?: string;
 	readonly fieldName?: string;
 
@@ -92,7 +96,7 @@ export class TableDefinitionError extends ZealotError {
 /**
  * Thrown when migration fails.
  */
-export class MigrationError extends ZealotError {
+export class MigrationError extends DatabaseError {
 	readonly fromVersion: number;
 	readonly toVersion: number;
 
@@ -112,7 +116,7 @@ export class MigrationError extends ZealotError {
 /**
  * Thrown when migration lock cannot be acquired.
  */
-export class MigrationLockError extends ZealotError {
+export class MigrationLockError extends DatabaseError {
 	constructor(message: string, options?: ErrorOptions) {
 		super("MIGRATION_LOCK_ERROR", message, options);
 		this.name = "MigrationLockError";
@@ -122,7 +126,7 @@ export class MigrationLockError extends ZealotError {
 /**
  * Thrown when a query fails.
  */
-export class QueryError extends ZealotError {
+export class QueryError extends DatabaseError {
 	readonly sql?: string;
 
 	constructor(message: string, sql?: string, options?: ErrorOptions) {
@@ -135,7 +139,7 @@ export class QueryError extends ZealotError {
 /**
  * Thrown when an expected entity is not found.
  */
-export class NotFoundError extends ZealotError {
+export class NotFoundError extends DatabaseError {
 	readonly tableName: string;
 	readonly id?: unknown;
 
@@ -153,7 +157,7 @@ export class NotFoundError extends ZealotError {
 /**
  * Thrown when trying to create an entity that already exists.
  */
-export class AlreadyExistsError extends ZealotError {
+export class AlreadyExistsError extends DatabaseError {
 	readonly tableName: string;
 	readonly field?: string;
 	readonly value?: unknown;
@@ -187,7 +191,7 @@ export class AlreadyExistsError extends ZealotError {
  * **Transaction behavior**: This error is thrown immediately and does NOT
  * auto-rollback. The caller or driver transaction wrapper handles rollback.
  */
-export class ConstraintViolationError extends ZealotError {
+export class ConstraintViolationError extends DatabaseError {
 	/**
 	 * Type of constraint that was violated.
 	 * "unknown" if the specific type couldn't be determined from the error.
@@ -234,7 +238,7 @@ export class ConstraintViolationError extends ZealotError {
 /**
  * Thrown when database connection fails.
  */
-export class ConnectionError extends ZealotError {
+export class ConnectionError extends DatabaseError {
 	constructor(message: string, options?: ErrorOptions) {
 		super("CONNECTION_ERROR", message, options);
 		this.name = "ConnectionError";
@@ -244,7 +248,7 @@ export class ConnectionError extends ZealotError {
 /**
  * Thrown when a transaction fails.
  */
-export class TransactionError extends ZealotError {
+export class TransactionError extends DatabaseError {
 	constructor(message: string, options?: ErrorOptions) {
 		super("TRANSACTION_ERROR", message, options);
 		this.name = "TransactionError";
@@ -269,7 +273,7 @@ export type EnsureOperation =
  * Includes step information for diagnosing partial failures,
  * since DDL is not reliably transactional on all databases (especially MySQL).
  */
-export class EnsureError extends ZealotError {
+export class EnsureError extends DatabaseError {
 	/** The operation that failed */
 	readonly operation: EnsureOperation;
 	/** The table being operated on */
@@ -301,7 +305,7 @@ export class EnsureError extends ZealotError {
  * the expected schema definition. For example, a column exists but
  * has a different type, or an index covers different columns.
  */
-export class SchemaDriftError extends ZealotError {
+export class SchemaDriftError extends DatabaseError {
 	/** The table where drift was detected */
 	readonly table: string;
 	/** Description of what drifted */
@@ -333,7 +337,7 @@ export class SchemaDriftError extends ZealotError {
  * a preflight check verifies data integrity. This error is thrown
  * when violations are found, including the query used to detect them.
  */
-export class ConstraintPreflightError extends ZealotError {
+export class ConstraintPreflightError extends DatabaseError {
 	/** The table being constrained */
 	readonly table: string;
 	/** The constraint being added (e.g., "unique:email" or "fk:authorId") */
@@ -367,10 +371,10 @@ export class ConstraintPreflightError extends ZealotError {
 // ============================================================================
 
 /**
- * Check if an error is a ZealotError.
+ * Check if an error is a DatabaseError.
  */
-export function isZealotError(error: unknown): error is ZealotError {
-	return error instanceof ZealotError;
+export function isDatabaseError(error: unknown): error is DatabaseError {
+	return error instanceof DatabaseError;
 }
 
 /**
@@ -378,7 +382,7 @@ export function isZealotError(error: unknown): error is ZealotError {
  */
 export function hasErrorCode(
 	error: unknown,
-	code: ZealotErrorCode,
-): error is ZealotError {
-	return isZealotError(error) && error.code === code;
+	code: DatabaseErrorCode,
+): error is DatabaseError {
+	return isDatabaseError(error) && error.code === code;
 }

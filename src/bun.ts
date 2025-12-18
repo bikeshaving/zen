@@ -426,7 +426,7 @@ export default class BunDriver implements Driver {
 			}
 		} else if (this.#dialect === "mysql") {
 			// MySQL: named lock
-			const LOCK_NAME = "zealot_migration";
+			const LOCK_NAME = "zen_migration";
 			const LOCK_TIMEOUT = 10;
 			const result = await this.#sql.unsafe(`SELECT GET_LOCK(?, ?)`, [
 				LOCK_NAME,

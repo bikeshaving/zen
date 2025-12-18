@@ -25,12 +25,12 @@ const dialects: TestDialect[] = [
 	{name: "sqlite", url: ":memory:", available: true},
 	{
 		name: "postgresql",
-		url: "postgres://zealot:zealot@localhost:15432/zealot_test",
+		url: "postgres://testuser:testpass@localhost:15432/test_db",
 		available: false,
 	},
 	{
 		name: "mysql",
-		url: "mysql://zealot:zealot@localhost:13306/zealot_test",
+		url: "mysql://testuser:testpass@localhost:13306/test_db",
 		available: false,
 	},
 ];

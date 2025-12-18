@@ -687,15 +687,15 @@ interface Driver {
 
 ## Error Handling
 
-All errors extend `ZealotError` with typed error codes:
+All errors extend `DatabaseError` with typed error codes:
 
 ```typescript
 import {
-  ZealotError,
+  DatabaseError,
   ValidationError,
   ConstraintViolationError,
   NotFoundError,
-  isZealotError,
+  isDatabaseError,
   hasErrorCode
 } from "@b9g/zen";
 
@@ -811,7 +811,7 @@ import {
   getDBMeta,          // Get database metadata from a Zod schema
 
   // Errors
-  ZealotError,        // Base error class
+  DatabaseError,        // Base error class
   ValidationError,    // Schema validation failed
   TableDefinitionError, // Invalid table definition
   MigrationError,     // Migration failed
@@ -822,7 +822,7 @@ import {
   ConstraintViolationError, // Database constraint violated
   ConnectionError,    // Connection failed
   TransactionError,   // Transaction failed
-  isZealotError,      // Type guard for ZealotError
+  isDatabaseError,      // Type guard for DatabaseError
   hasErrorCode,       // Check error code
 } from "@b9g/zen";
 ```
@@ -863,7 +863,7 @@ import type {
   DBExpression,       // Runtime database expression
 
   // Error types
-  ZealotErrorCode,    // Error code string literals
+  DatabaseErrorCode,    // Error code string literals
 } from "@b9g/zen";
 ```
 

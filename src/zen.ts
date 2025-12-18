@@ -69,7 +69,7 @@ export {
 // ============================================================================
 
 export {
-	ZealotError,
+	DatabaseError,
 	ValidationError,
 	TableDefinitionError,
 	MigrationError,
@@ -83,8 +83,8 @@ export {
 	EnsureError,
 	SchemaDriftError,
 	ConstraintPreflightError,
-	isZealotError,
+	isDatabaseError,
 	hasErrorCode,
-	type ZealotErrorCode,
+	type DatabaseErrorCode,
 	type EnsureOperation,
 } from "./impl/errors.js";

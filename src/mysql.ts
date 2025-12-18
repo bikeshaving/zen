@@ -301,7 +301,7 @@ export default class MySQLDriver implements Driver {
 	}
 
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
-		const LOCK_NAME = "zealot_migration";
+		const LOCK_NAME = "zen_migration";
 		const LOCK_TIMEOUT = 10;
 
 		const [lockResult] = await this.#pool.execute(`SELECT GET_LOCK(?, ?)`, [

@@ -17,7 +17,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: zealot_test
+          POSTGRES_DB: test_db
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -49,4 +49,4 @@ jobs:
         run: bun test
         env:
           # PostgreSQL connection for tests
-          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/zealot_test
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/test_db
