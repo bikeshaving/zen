@@ -1,8 +1,11 @@
 /**
- * Test driver for rendering SQL templates without a real database.
+ * SQL rendering utilities for all dialects.
  *
- * This is the ONLY place outside of production drivers where dialect-specific
- * rendering happens. Used by tests and DDL generation.
+ * This is the single source of truth for dialect-specific SQL rendering:
+ * - Identifier quoting
+ * - Placeholder syntax
+ * - SQL builtin resolution
+ * - Template rendering (for DDL and queries)
  */
 
 import {isSQLIdentifier} from "./template.js";
@@ -15,13 +18,14 @@ import {isSQLBuiltin} from "./database.js";
 export type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
 // ============================================================================
-// Rendering
+// Core Helpers
 // ============================================================================
 
 /**
  * Quote an identifier based on dialect.
+ * MySQL uses backticks, PostgreSQL/SQLite use double quotes.
  */
-function quoteIdent(name: string, dialect: SQLDialect): string {
+export function quoteIdent(name: string, dialect: SQLDialect): string {
 	if (dialect === "mysql") {
 		return `\`${name.replace(/`/g, "``")}\``;
 	}
@@ -30,12 +34,24 @@ function quoteIdent(name: string, dialect: SQLDialect): string {
 
 /**
  * Get placeholder syntax based on dialect.
+ * PostgreSQL uses $1, $2, etc. MySQL/SQLite use ?.
  */
-function placeholder(index: number, dialect: SQLDialect): string {
+export function placeholder(index: number, dialect: SQLDialect): string {
 	if (dialect === "postgresql") {
 		return `$${index}`;
 	}
 	return "?";
+}
+
+/**
+ * Resolve a SQL builtin symbol to its SQL representation.
+ */
+export function resolveSQLBuiltin(sym: symbol): string {
+	const key = Symbol.keyFor(sym);
+	if (!key?.startsWith("@b9g/zen:")) {
+		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
+	}
+	return key.slice("@b9g/zen:".length);
 }
 
 /**
@@ -90,17 +106,9 @@ export function renderDDL(
 	return sql;
 }
 
-/**
- * Resolve a SQL builtin to its SQL representation.
- */
-function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	// Strip the prefix and return the SQL keyword
-	return key.slice("@b9g/zen:".length);
-}
+// ============================================================================
+// Query Building
+// ============================================================================
 
 /**
  * Build SQL from template parts with parameter placeholders.

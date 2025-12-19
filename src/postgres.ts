@@ -10,32 +10,29 @@
 import type {Driver, Table, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
-	EnsureError,
-	SchemaDriftError,
-	ConstraintPreflightError,
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import {
+	EnsureError,
+	SchemaDriftError,
+	ConstraintPreflightError,
+} from "./impl/errors.js";
+import {generateDDL, generateColumnDDL} from "./impl/ddl.js";
+import {
+	renderDDL,
+	quoteIdent as quoteIdentDialect,
+	resolveSQLBuiltin,
+} from "./impl/sql.js";
 import postgres from "postgres";
 
-/**
- * Resolve SQL builtin to dialect-specific SQL.
- */
-function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	// Strip the prefix and return the SQL keyword
-	return key.slice("@b9g/zen:".length);
-}
+const DIALECT = "postgresql" as const;
 
 /**
- * Quote an identifier (table name, column name) using PostgreSQL double quotes.
- * Double quotes inside the name are doubled to escape.
+ * Quote an identifier using PostgreSQL double quotes.
  */
 function quoteIdent(name: string): string {
-	return `"${name.replace(/"/g, '""')}"`;
+	return quoteIdentDialect(name, DIALECT);
 }
 
 /**
@@ -46,8 +43,23 @@ function buildSQL(
 	strings: TemplateStringsArray,
 	values: unknown[],
 ): {sql: string; params: unknown[]} {
-	const {buildSQL: sharedBuildSQL} = require("./impl/test-driver.js");
-	return sharedBuildSQL(strings, values, "postgres");
+	let sql = strings[0];
+	const params: unknown[] = [];
+	let paramIndex = 1;
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLBuiltin(value)) {
+			sql += resolveSQLBuiltin(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			sql += quoteIdent(value.name) + strings[i + 1];
+		} else {
+			sql += `$${paramIndex++}` + strings[i + 1];
+			params.push(value);
+		}
+	}
+
+	return {sql, params};
 }
 
 /**
@@ -284,14 +296,8 @@ export default class PostgresDriver implements Driver {
 			if (!exists) {
 				step = 1;
 				// Create table with full structure using DDL generation
-				const {generateDDL} = await import("./impl/ddl.js");
-				const {renderDDL} = await import("./impl/test-driver.js");
-				const ddlTemplate = generateDDL(table, {dialect: "postgresql"});
-				const ddlSQL = renderDDL(
-					ddlTemplate[0],
-					ddlTemplate.slice(1),
-					"postgresql",
-				);
+				const ddlTemplate = generateDDL(table, {dialect: DIALECT});
+				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
 
 				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
 					await this.#sql.unsafe(stmt.trim());
@@ -350,13 +356,17 @@ export default class PostgresDriver implements Driver {
 			const existingConstraints = await this.#getConstraints(tableName);
 
 			step = 2;
-			const uniqueApplied =
-				await this.#ensureUniqueConstraints(table, existingConstraints);
+			const uniqueApplied = await this.#ensureUniqueConstraints(
+				table,
+				existingConstraints,
+			);
 			applied = applied || uniqueApplied;
 
 			step = 3;
-			const fkApplied =
-				await this.#ensureForeignKeys(table, existingConstraints);
+			const fkApplied = await this.#ensureForeignKeys(
+				table,
+				existingConstraints,
+			);
 			applied = applied || fkApplied;
 
 			return {applied};
@@ -420,9 +430,7 @@ export default class PostgresDriver implements Driver {
 	async #getIndexes(
 		tableName: string,
 	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
-		const result = await this.#sql<
-			{indexname: string; indexdef: string}[]
-		>`
+		const result = await this.#sql<{indexname: string; indexdef: string}[]>`
 			SELECT indexname, indexdef
 			FROM pg_indexes
 			WHERE schemaname = 'public'
@@ -434,9 +442,7 @@ export default class PostgresDriver implements Driver {
 			// Example: CREATE UNIQUE INDEX idx_name ON table (col1, col2)
 			const match = row.indexdef.match(/\((.*?)\)/);
 			const columns = match
-				? match[1]
-						.split(",")
-						.map((c) => c.trim().replace(/"/g, ""))
+				? match[1].split(",").map((c) => c.trim().replace(/"/g, ""))
 				: [];
 			const unique = row.indexdef.includes("UNIQUE INDEX");
 
@@ -528,8 +534,6 @@ export default class PostgresDriver implements Driver {
 	}
 
 	async #addColumn(table: Table, fieldName: string): Promise<void> {
-		const {generateColumnDDL} = await import("./impl/ddl.js");
-		const {renderDDL} = await import("./impl/test-driver.js");
 		const zodType = table.schema.shape[fieldName] as any;
 		const fieldMeta = table.meta.fields[fieldName] || {};
 
@@ -537,13 +541,9 @@ export default class PostgresDriver implements Driver {
 			fieldName,
 			zodType,
 			fieldMeta,
-			"postgresql",
+			DIALECT,
 		);
-		const colSQL = renderDDL(
-			colTemplate[0],
-			colTemplate.slice(1),
-			"postgresql",
-		);
+		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), DIALECT);
 
 		await this.#sql.unsafe(
 			`ALTER TABLE ${quoteIdent(table.name)} ADD COLUMN IF NOT EXISTS ${colSQL}`,
@@ -724,10 +724,7 @@ export default class PostgresDriver implements Driver {
 		return applied;
 	}
 
-	async #preflightUnique(
-		tableName: string,
-		columns: string[],
-	): Promise<void> {
+	async #preflightUnique(tableName: string, columns: string[]): Promise<void> {
 		const columnList = columns.map(quoteIdent).join(", ");
 		const result = await this.#sql.unsafe<{count: string}[]>(
 			`SELECT COUNT(*) as count FROM ${quoteIdent(tableName)} GROUP BY ${columnList} HAVING COUNT(*) > 1`,

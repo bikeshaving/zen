@@ -16,9 +16,13 @@ import {
 	isSQLIdentifier,
 } from "./zen.js";
 import {generateDDL} from "./impl/ddl.js";
-import {renderDDL} from "./impl/test-driver.js";
-
-type SQLDialect = "sqlite" | "postgresql" | "mysql";
+import {
+	renderDDL,
+	quoteIdent,
+	resolveSQLBuiltin,
+	placeholder,
+	type SQLDialect,
+} from "./impl/sql.js";
 
 /**
  * Detect SQL dialect from URL.
@@ -39,30 +43,6 @@ function detectDialect(url: string): SQLDialect {
 }
 
 /**
- * Resolve SQL builtin to dialect-specific SQL.
- */
-function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	// Strip the prefix and return the SQL keyword
-	return key.slice("@b9g/zen:".length);
-}
-
-/**
- * Quote an identifier (table name, column name) per dialect.
- * MySQL: backticks, PostgreSQL/SQLite: double quotes.
- */
-function quoteIdent(name: string, dialect: SQLDialect): string {
-	if (dialect === "mysql") {
-		return `\`${name.replace(/`/g, "``")}\``;
-	}
-	// PostgreSQL and SQLite use double quotes
-	return `"${name.replace(/"/g, '""')}"`;
-}
-
-/**
  * Build SQL from template parts using the appropriate placeholder style.
  * SQLite/MySQL use ?, PostgreSQL uses $1, $2, etc.
  * SQL symbols and identifiers are inlined directly; other values use placeholders.
@@ -74,7 +54,6 @@ function buildSQL(
 ): {sql: string; params: unknown[]} {
 	let sql = strings[0];
 	const params: unknown[] = [];
-	let paramIndex = 1;
 
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
@@ -86,8 +65,7 @@ function buildSQL(
 			sql += quoteIdent(value.name, dialect) + strings[i + 1];
 		} else {
 			// Add placeholder and keep value
-			const placeholder = dialect === "postgresql" ? `$${paramIndex++}` : "?";
-			sql += placeholder + strings[i + 1];
+			sql += placeholder(params.length + 1, dialect) + strings[i + 1];
 			params.push(value);
 		}
 	}

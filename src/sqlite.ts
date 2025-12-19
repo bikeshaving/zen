@@ -19,26 +19,21 @@ import {
 	SchemaDriftError,
 	ConstraintPreflightError,
 } from "./impl/errors.js";
+import {generateDDL, generateColumnDDL} from "./impl/ddl.js";
+import {
+	renderDDL,
+	quoteIdent as quoteIdentDialect,
+	resolveSQLBuiltin,
+} from "./impl/sql.js";
 import Database from "better-sqlite3";
 
-/**
- * Resolve SQL builtin to dialect-specific SQL.
- */
-function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	// Strip the prefix and return the SQL keyword
-	return key.slice("@b9g/zen:".length);
-}
+const DIALECT = "sqlite" as const;
 
 /**
- * Quote an identifier (table name, column name) using SQLite double quotes.
- * Double quotes inside the name are doubled to escape.
+ * Quote an identifier using SQLite double quotes.
  */
 function quoteIdent(name: string): string {
-	return `"${name.replace(/"/g, '""')}"`;
+	return quoteIdentDialect(name, DIALECT);
 }
 
 /**
@@ -55,13 +50,10 @@ function buildSQL(
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
 		if (isSQLBuiltin(value)) {
-			// Inline the symbol's SQL directly
 			sql += resolveSQLBuiltin(value) + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {
-			// Quote identifier with SQLite double quotes
 			sql += quoteIdent(value.name) + strings[i + 1];
 		} else {
-			// Add placeholder and keep value
 			sql += "?" + strings[i + 1];
 			params.push(value);
 		}
@@ -242,10 +234,8 @@ export default class SQLiteDriver implements Driver {
 			if (!exists) {
 				// Step 1: Create table with full structure
 				step = 1;
-				const {generateDDL} = await import("./impl/ddl.js");
-				const {renderDDL} = await import("./impl/test-driver.js");
-				const ddlTemplate = generateDDL(table, {dialect: "sqlite"});
-				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), "sqlite");
+				const ddlTemplate = generateDDL(table, {dialect: DIALECT});
+				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
 
 				// Execute each statement (CREATE TABLE + CREATE INDEX statements)
 				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
@@ -311,7 +301,10 @@ export default class SQLiteDriver implements Driver {
 
 			// Step 3: Apply missing foreign keys with preflight
 			step = 3;
-			const fksApplied = await this.#ensureForeignKeys(table, existingConstraints);
+			const fksApplied = await this.#ensureForeignKeys(
+				table,
+				existingConstraints,
+			);
 			applied = applied || fksApplied;
 
 			return {applied};
@@ -344,7 +337,9 @@ export default class SQLiteDriver implements Driver {
 	async #getColumns(
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
-		const result = this.#db.prepare(`PRAGMA table_info(${quoteIdent(tableName)})`).all();
+		const result = this.#db
+			.prepare(`PRAGMA table_info(${quoteIdent(tableName)})`)
+			.all();
 		return (result as any[]).map((row) => ({
 			name: row.name,
 			type: row.type,
@@ -355,12 +350,16 @@ export default class SQLiteDriver implements Driver {
 	async #getIndexes(
 		tableName: string,
 	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
-		const indexList = this.#db.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`).all() as any[];
+		const indexList = this.#db
+			.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`)
+			.all() as any[];
 
 		const indexes: {name: string; columns: string[]; unique: boolean}[] = [];
 		for (const idx of indexList) {
 			if (idx.origin === "pk") continue; // Skip primary key index
-			const indexInfo = this.#db.prepare(`PRAGMA index_info(${quoteIdent(idx.name)})`).all() as any[];
+			const indexInfo = this.#db
+				.prepare(`PRAGMA index_info(${quoteIdent(idx.name)})`)
+				.all() as any[];
 			indexes.push({
 				name: idx.name,
 				columns: indexInfo.map((col) => col.name),
@@ -394,7 +393,9 @@ export default class SQLiteDriver implements Driver {
 		}
 
 		// Get foreign keys
-		const fks = this.#db.prepare(`PRAGMA foreign_key_list(${quoteIdent(tableName)})`).all() as any[];
+		const fks = this.#db
+			.prepare(`PRAGMA foreign_key_list(${quoteIdent(tableName)})`)
+			.all() as any[];
 
 		// Group by id (each FK can span multiple columns)
 		const fkMap = new Map<
@@ -448,13 +449,16 @@ export default class SQLiteDriver implements Driver {
 		table: T,
 		fieldName: string,
 	): Promise<void> {
-		const {generateColumnDDL} = await import("./impl/ddl.js");
-		const {renderDDL} = await import("./impl/test-driver.js");
 		const zodType = table.schema.shape[fieldName];
 		const fieldMeta = table.meta.fields[fieldName] || {};
 
-		const colTemplate = generateColumnDDL(fieldName, zodType, fieldMeta, "sqlite");
-		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), "sqlite");
+		const colTemplate = generateColumnDDL(
+			fieldName,
+			zodType,
+			fieldMeta,
+			DIALECT,
+		);
+		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), DIALECT);
 
 		// SQLite doesn't support IF NOT EXISTS in ALTER TABLE ADD COLUMN
 		const sql = `ALTER TABLE ${quoteIdent(table.name)} ADD COLUMN ${colSQL}`;
@@ -633,10 +637,7 @@ export default class SQLiteDriver implements Driver {
 		return false;
 	}
 
-	async #preflightUnique(
-		tableName: string,
-		columns: string[],
-	): Promise<void> {
+	async #preflightUnique(tableName: string, columns: string[]): Promise<void> {
 		const columnList = columns.map(quoteIdent).join(", ");
 		const sql = `SELECT ${columnList}, COUNT(*) as cnt FROM ${quoteIdent(tableName)} GROUP BY ${columnList} HAVING COUNT(*) > 1 LIMIT 1`;
 

@@ -12,9 +12,9 @@ import {
 	isSQLTemplate,
 	type SQLTemplate,
 } from "./template.js";
-import {renderSQL, type SQLDialect} from "./test-driver.js";
+import {renderSQL, type SQLDialect} from "./sql.js";
 
-export type {SQLDialect} from "./test-driver.js";
+export type {SQLDialect} from "./sql.js";
 
 export interface QueryOptions {
 	dialect?: SQLDialect;

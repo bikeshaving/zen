@@ -10,32 +10,29 @@
 import type {Driver, Table, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
-	EnsureError,
-	SchemaDriftError,
-	ConstraintPreflightError,
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import {
+	EnsureError,
+	SchemaDriftError,
+	ConstraintPreflightError,
+} from "./impl/errors.js";
+import {generateDDL, generateColumnDDL} from "./impl/ddl.js";
+import {
+	renderDDL,
+	quoteIdent as quoteIdentDialect,
+	resolveSQLBuiltin,
+} from "./impl/sql.js";
 import mysql from "mysql2/promise";
 
-/**
- * Resolve SQL builtin to dialect-specific SQL.
- */
-function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	// Strip the prefix and return the SQL keyword
-	return key.slice("@b9g/zen:".length);
-}
+const DIALECT = "mysql" as const;
 
 /**
- * Quote an identifier (table name, column name) using MySQL backticks.
- * Backticks inside the name are doubled to escape.
+ * Quote an identifier using MySQL backticks.
  */
 function quoteIdent(name: string): string {
-	return `\`${name.replace(/`/g, "``")}\``;
+	return quoteIdentDialect(name, DIALECT);
 }
 
 /**
@@ -46,8 +43,22 @@ function buildSQL(
 	strings: TemplateStringsArray,
 	values: unknown[],
 ): {sql: string; params: unknown[]} {
-	const {buildSQL: sharedBuildSQL} = require("./impl/test-driver.js");
-	return sharedBuildSQL(strings, values, "mysql");
+	let sql = strings[0];
+	const params: unknown[] = [];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLBuiltin(value)) {
+			sql += resolveSQLBuiltin(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			sql += quoteIdent(value.name) + strings[i + 1];
+		} else {
+			sql += "?" + strings[i + 1];
+			params.push(value);
+		}
+	}
+
+	return {sql, params};
 }
 
 /**
@@ -328,10 +339,8 @@ export default class MySQLDriver implements Driver {
 			if (!exists) {
 				step = 1;
 				// Create table with full structure using DDL generation
-				const {generateDDL} = await import("./impl/ddl.js");
-				const {renderDDL} = await import("./impl/test-driver.js");
-				const ddlTemplate = generateDDL(table, {dialect: "mysql"});
-				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), "mysql");
+				const ddlTemplate = generateDDL(table, {dialect: DIALECT});
+				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
 
 				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
 					await this.#pool.execute(stmt.trim(), []);
@@ -390,13 +399,17 @@ export default class MySQLDriver implements Driver {
 			const existingConstraints = await this.#getConstraints(tableName);
 
 			step = 2;
-			const uniqueApplied =
-				await this.#ensureUniqueConstraints(table, existingConstraints);
+			const uniqueApplied = await this.#ensureUniqueConstraints(
+				table,
+				existingConstraints,
+			);
 			applied = applied || uniqueApplied;
 
 			step = 3;
-			const fkApplied =
-				await this.#ensureForeignKeys(table, existingConstraints);
+			const fkApplied = await this.#ensureForeignKeys(
+				table,
+				existingConstraints,
+			);
 			applied = applied || fkApplied;
 
 			return {applied};
@@ -545,8 +558,6 @@ export default class MySQLDriver implements Driver {
 	}
 
 	async #addColumn(table: Table, fieldName: string): Promise<void> {
-		const {generateColumnDDL} = await import("./impl/ddl.js");
-		const {renderDDL} = await import("./impl/test-driver.js");
 		const zodType = table.schema.shape[fieldName] as any;
 		const fieldMeta = table.meta.fields[fieldName] || {};
 
@@ -554,9 +565,9 @@ export default class MySQLDriver implements Driver {
 			fieldName,
 			zodType,
 			fieldMeta,
-			"mysql",
+			DIALECT,
 		);
-		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), "mysql");
+		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), DIALECT);
 
 		// MySQL doesn't support IF NOT EXISTS for ADD COLUMN
 		await this.#pool.execute(
@@ -744,10 +755,7 @@ export default class MySQLDriver implements Driver {
 		return applied;
 	}
 
-	async #preflightUnique(
-		tableName: string,
-		columns: string[],
-	): Promise<void> {
+	async #preflightUnique(tableName: string, columns: string[]): Promise<void> {
 		const columnList = columns.map(quoteIdent).join(", ");
 		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
 			`SELECT COUNT(*) as count FROM ${quoteIdent(tableName)} GROUP BY ${columnList} HAVING COUNT(*) > 1`,

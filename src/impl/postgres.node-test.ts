@@ -1,10 +1,10 @@
 /**
- * MySQL driver schema management tests (Node.js)
+ * PostgreSQL driver schema management tests (Node.js)
  *
- * Tests ensureTable() and ensureConstraints() for mysql2 driver.
+ * Tests ensureTable() and ensureConstraints() for postgres driver.
  * Run with: npm run test:node
  *
- * Note: Requires MySQL to be running. Skips if unavailable.
+ * Note: Requires PostgreSQL to be running. Skips if unavailable.
  */
 
 import {describe, test, expect} from "./node-test-utils.js";
@@ -12,31 +12,31 @@ import {table} from "./table.js";
 import {z} from "zod";
 import {SchemaDriftError} from "./errors.js";
 
-// Check if MySQL is available
-let MySQLDriver: any;
-let mysqlAvailable = false;
+// Check if PostgreSQL is available
+let PostgresDriver: any;
+let postgresAvailable = false;
 
 try {
-	const module = await import("../mysql.js");
-	MySQLDriver = module.default;
+	const module = await import("../postgres.js");
+	PostgresDriver = module.default;
 
 	// Try to connect
-	const testDriver = new MySQLDriver("mysql://root@localhost/mysql");
+	const testDriver = new PostgresDriver("postgresql://localhost/postgres");
 	try {
 		await testDriver.run(["SELECT 1"] as any, []);
-		mysqlAvailable = true;
+		postgresAvailable = true;
 		await testDriver.close();
 	} catch {
-		mysqlAvailable = false;
+		postgresAvailable = false;
 	}
 } catch {
-	mysqlAvailable = false;
+	postgresAvailable = false;
 }
 
-if (mysqlAvailable) {
-	describe("MySQLDriver Schema Management", () => {
+if (postgresAvailable) {
+	describe("PostgresDriver Schema Management", () => {
 		test("ensureTable() creates new table", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new PostgresDriver("postgresql://localhost/postgres");
 
 			const users = table("test_users_create", {
 				id: z.number().int().db.primary(),
@@ -55,12 +55,14 @@ if (mysqlAvailable) {
 		});
 
 		test("ensureTable() detects missing unique constraint", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new PostgresDriver("postgresql://localhost/postgres");
 
 			try {
 				// Create table without unique constraint
 				await driver.run(
-					["CREATE TABLE test_users_unique (id INT PRIMARY KEY, email TEXT)"] as any,
+					[
+						"CREATE TABLE test_users_unique (id SERIAL PRIMARY KEY, email TEXT)",
+					] as any,
 					[],
 				);
 
@@ -81,7 +83,7 @@ if (mysqlAvailable) {
 		});
 
 		test("ensureConstraints() applies foreign key with preflight", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new PostgresDriver("postgresql://localhost/postgres");
 
 			try {
 				const users = table("test_users_fk", {
@@ -115,7 +117,7 @@ if (mysqlAvailable) {
 		});
 	});
 } else {
-	describe.skip("MySQLDriver Schema Management (MySQL not available)", () => {
+	describe.skip("PostgresDriver Schema Management (PostgreSQL not available)", () => {
 		test("skipped", () => {});
 	});
 }
