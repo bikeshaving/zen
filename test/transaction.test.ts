@@ -8,8 +8,8 @@
 
 import {test, expect, describe, mock} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "../table.js";
-import {Database, type Driver} from "../database.js";
+import {table, extendZod} from "../src/impl/table.js";
+import {Database, type Driver} from "../src/impl/database.js";
 
 // Extend Zod once before tests
 extendZod(z);

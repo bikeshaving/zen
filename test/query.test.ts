@@ -1,14 +1,14 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "../table.js";
+import {table, extendZod} from "../src/impl/table.js";
 import {
 	buildSelectColumns,
 	parseTemplate,
 	buildQuery,
 	createQuery,
 	rawQuery,
-} from "../query.js";
-import {makeTemplate, createTemplate} from "../template.js";
+} from "../src/impl/query.js";
+import {makeTemplate, createTemplate} from "../src/impl/template.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -450,7 +450,7 @@ describe("SQL fragment placeholder handling", () => {
 
 describe("Empty array in in() clause", () => {
 	test("in() with empty array returns 1 = 0 (always false)", () => {
-		const {renderFragment} = require("../query.js");
+		const {renderFragment} = require("../src/impl/query.js");
 		const {sql, params} = renderFragment(users.in("id", []));
 		expect(sql).toBe("1 = 0");
 		expect(params).toEqual([]);

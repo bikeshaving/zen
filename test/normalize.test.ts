@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "../table.js";
+import {table, extendZod} from "../src/impl/table.js";
 import {
 	extractEntityData,
 	getPrimaryKeyValue,
@@ -9,7 +9,7 @@ import {
 	resolveReferences,
 	normalize,
 	normalizeOne,
-} from "../query.js";
+} from "../src/impl/query.js";
 
 // Extend Zod once before tests
 extendZod(z);

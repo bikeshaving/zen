@@ -10,8 +10,8 @@
  */
 
 import {describe, it, expect, afterAll, beforeAll, beforeEach} from "bun:test";
-import {Database, table, z, ident} from "../../zen.js";
-import BunDriver from "../../bun.js";
+import {Database, table, z, ident} from "../src/impl/../zen.js";
+import BunDriver from "../src/impl/../bun.js";
 
 // =============================================================================
 // Test Database Configurations

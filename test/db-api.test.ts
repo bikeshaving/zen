@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {extendZod, table} from "../table.js";
+import {extendZod, table} from "../src/impl/table.js";
 
 // Extend Zod once before tests
 extendZod(z);

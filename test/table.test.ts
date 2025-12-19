@@ -1,7 +1,7 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, isTable, extendZod} from "../table.js";
-import {renderFragment} from "../query.js";
+import {table, isTable, extendZod} from "../src/impl/table.js";
+import {renderFragment} from "../src/impl/query.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -693,7 +693,7 @@ describe("Table.cols", () => {
 
 	test("fragment can be interpolated in queries", () => {
 		// Import parseTemplate to test interpolation
-		const {parseTemplate} = require("../query.js");
+		const {parseTemplate} = require("../src/impl/query.js");
 
 		const strings = [
 			"SELECT * FROM users WHERE ",
@@ -770,7 +770,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("inserted() accepts valid values", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		// Should not throw - symbol
 		const schema1 = z.date().db.inserted(NOW);
@@ -782,7 +782,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("updated() accepts valid values", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		// Should not throw - symbol
 		const schema1 = z.date().db.updated(NOW);
@@ -794,7 +794,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("upserted() accepts valid values", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		// Should not throw - symbol
 		const schema1 = z.date().db.upserted(NOW);
@@ -810,7 +810,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("upserted() sets correct metadata", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		const TestTable = table("test_upserted", {
 			id: z.string().db.primary(),
@@ -902,7 +902,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("encode() throws when combined with inserted()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -913,7 +913,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("encode() throws when combined with updated()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -924,7 +924,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("decode() throws when combined with inserted()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -935,7 +935,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("decode() throws when combined with updated()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -946,7 +946,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("inserted() throws when combined with encode()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -957,7 +957,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("inserted() throws when combined with decode()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -968,7 +968,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("updated() throws when combined with encode()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -979,7 +979,7 @@ describe("Schema marker validation", () => {
 	});
 
 	test("updated() throws when combined with decode()", () => {
-		const {NOW} = require("../database.js");
+		const {NOW} = require("../src/impl/database.js");
 
 		expect(() =>
 			z
@@ -1063,8 +1063,8 @@ describe("Circular reference detection", () => {
 // =============================================================================
 
 describe("decodeData error handling", () => {
-	const {decodeData} = require("../table.js");
-	const {Database} = require("../database.js");
+	const {decodeData} = require("../src/impl/table.js");
+	const {Database} = require("../src/impl/database.js");
 
 	test("malformed JSON in object field should have clear error message", async () => {
 		const Settings = table("settings", {

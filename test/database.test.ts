@@ -1,9 +1,9 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "../table.js";
-import {Database, NOW, isSQLBuiltin, type Driver} from "../database.js";
-import {isSQLIdentifier} from "../template.js";
-import {renderFragment} from "../query.js";
+import {table, extendZod} from "../src/impl/table.js";
+import {Database, NOW, isSQLBuiltin, type Driver} from "../src/impl/database.js";
+import {isSQLIdentifier} from "../src/impl/template.js";
+import {renderFragment} from "../src/impl/query.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -1105,7 +1105,7 @@ describe("Soft Delete", () => {
 });
 
 describe("DB Expressions", () => {
-	const {db: _db} = require("../database.js");
+	const {db: _db} = require("../src/impl/database.js");
 
 	const TimestampTable = table("timestamps", {
 		id: z.string().db.primary(),

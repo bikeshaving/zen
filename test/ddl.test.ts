@@ -1,8 +1,8 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "../table.js";
-import {generateDDL, type SQLDialect} from "../ddl.js";
-import {renderDDL} from "../sql.js";
+import {table, extendZod} from "../src/impl/table.js";
+import {generateDDL, type SQLDialect} from "../src/impl/ddl.js";
+import {renderDDL} from "../src/impl/sql.js";
 
 // Extend Zod once before tests
 extendZod(z);
