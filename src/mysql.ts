@@ -222,7 +222,8 @@ export default class MySQLDriver implements Driver {
 		const handleError = this.#handleError.bind(this);
 
 		try {
-			await connection.execute("START TRANSACTION", []);
+			// Use query() not execute() - transaction commands aren't supported in prepared statement protocol
+			await connection.query("START TRANSACTION");
 
 			const txDriver: Driver = {
 				supportsReturning: false,
@@ -286,10 +287,10 @@ export default class MySQLDriver implements Driver {
 			};
 
 			const result = await fn(txDriver);
-			await connection.execute("COMMIT", []);
+			await connection.query("COMMIT");
 			return result;
 		} catch (error) {
-			await connection.execute("ROLLBACK", []);
+			await connection.query("ROLLBACK");
 			throw error;
 		} finally {
 			connection.release();

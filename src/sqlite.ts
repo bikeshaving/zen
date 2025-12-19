@@ -48,13 +48,17 @@ function buildSQL(
 	const params: unknown[] = [];
 
 	for (let i = 0; i < values.length; i++) {
-		const value = values[i];
+		let value = values[i];
 		if (isSQLBuiltin(value)) {
 			sql += resolveSQLBuiltin(value) + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {
 			sql += quoteIdent(value.name) + strings[i + 1];
 		} else {
 			sql += "?" + strings[i + 1];
+			// Convert booleans to integers - better-sqlite3 doesn't accept true/false
+			if (typeof value === "boolean") {
+				value = value ? 1 : 0;
+			}
 			params.push(value);
 		}
 	}
