@@ -14,7 +14,6 @@ import {
 	ConstraintPreflightError,
 	isSQLBuiltin,
 	isSQLIdentifier,
-	NOW,
 } from "./zen.js";
 import {generateDDL} from "./impl/ddl.js";
 import {renderDDL} from "./impl/test-driver.js";
@@ -40,15 +39,15 @@ function detectDialect(url: string): SQLDialect {
 }
 
 /**
- * Resolve SQL symbol to dialect-specific SQL.
+ * Resolve SQL builtin to dialect-specific SQL.
  */
-function resolveSQLSymbol(sym: symbol): string {
-	switch (sym) {
-		case NOW:
-			return "CURRENT_TIMESTAMP";
-		default:
-			throw new Error(`Unknown SQL symbol: ${String(sym)}`);
+function resolveSQLBuiltin(sym: symbol): string {
+	const key = Symbol.keyFor(sym);
+	if (!key?.startsWith("@b9g/zen:")) {
+		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
 	}
+	// Strip the prefix and return the SQL keyword
+	return key.slice("@b9g/zen:".length);
 }
 
 /**
@@ -81,7 +80,7 @@ function buildSQL(
 		const value = values[i];
 		if (isSQLBuiltin(value)) {
 			// Inline the symbol's SQL directly
-			sql += resolveSQLSymbol(value) + strings[i + 1];
+			sql += resolveSQLBuiltin(value) + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {
 			// Quote identifier per dialect
 			sql += quoteIdent(value.name, dialect) + strings[i + 1];
