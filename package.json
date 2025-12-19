@@ -53,6 +53,7 @@
   "scripts": {
     "build": "libuild build --save",
     "test": "bun test",
+    "test:node": "node --import tsx --test 'src/impl/*.node.test.ts'",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --ext .js,.jsx,.ts,.tsx .",
     "prepublishOnly": "echo 'ERROR: Cannot publish from root directory. Use libuild publish instead.' && exit 1"
@@ -73,13 +74,14 @@
     "eslint-plugin-prettier": "^5.5.4",
     "mysql2": "^3.12.0",
     "postgres": "^3.4.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
-    "zod": "^4.0.0",
     "better-sqlite3": "^11.0.0",
+    "mysql2": "^3.0.0",
     "postgres": "^3.0.0",
-    "mysql2": "^3.0.0"
+    "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "better-sqlite3": {
