@@ -12,6 +12,9 @@ import {table} from "./table.js";
 import {z} from "zod";
 import {SchemaDriftError} from "./errors.js";
 
+// Connection string matching docker-compose.yml
+const POSTGRES_URL = "postgresql://testuser:testpass@localhost:15432/test_db";
+
 // Check if PostgreSQL is available
 let PostgresDriver: any;
 let postgresAvailable = false;
@@ -21,7 +24,7 @@ try {
 	PostgresDriver = module.default;
 
 	// Try to connect
-	const testDriver = new PostgresDriver("postgresql://localhost/postgres");
+	const testDriver = new PostgresDriver(POSTGRES_URL);
 	try {
 		await testDriver.run(["SELECT 1"] as any, []);
 		postgresAvailable = true;
@@ -36,7 +39,7 @@ try {
 if (postgresAvailable) {
 	describe("PostgresDriver Schema Management", () => {
 		test("ensureTable() creates new table", async () => {
-			const driver = new PostgresDriver("postgresql://localhost/postgres");
+			const driver = new PostgresDriver(POSTGRES_URL);
 
 			const users = table("test_users_create", {
 				id: z.number().int().db.primary(),
@@ -55,7 +58,7 @@ if (postgresAvailable) {
 		});
 
 		test("ensureTable() detects missing unique constraint", async () => {
-			const driver = new PostgresDriver("postgresql://localhost/postgres");
+			const driver = new PostgresDriver(POSTGRES_URL);
 
 			try {
 				// Create table without unique constraint
@@ -83,7 +86,7 @@ if (postgresAvailable) {
 		});
 
 		test("ensureConstraints() applies foreign key with preflight", async () => {
-			const driver = new PostgresDriver("postgresql://localhost/postgres");
+			const driver = new PostgresDriver(POSTGRES_URL);
 
 			try {
 				const users = table("test_users_fk", {

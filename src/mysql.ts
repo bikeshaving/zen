@@ -451,14 +451,14 @@ export default class MySQLDriver implements Driver {
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
 		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
-			`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`,
+			`SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`,
 			[tableName],
 		);
 
 		return rows.map((row) => ({
-			name: row.column_name,
-			type: row.data_type,
-			notnull: row.is_nullable === "NO",
+			name: row.COLUMN_NAME,
+			type: row.DATA_TYPE,
+			notnull: row.IS_NULLABLE === "NO",
 		}));
 	}
 
@@ -467,19 +467,19 @@ export default class MySQLDriver implements Driver {
 	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
 		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
 			`SELECT
-				index_name,
-				GROUP_CONCAT(column_name ORDER BY seq_in_index) as columns,
-				MAX(non_unique = 0) as is_unique
+				INDEX_NAME,
+				GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) as COLUMNS,
+				MAX(NON_UNIQUE = 0) as IS_UNIQUE
 			FROM information_schema.statistics
-			WHERE table_schema = DATABASE() AND table_name = ? AND index_name != 'PRIMARY'
-			GROUP BY index_name`,
+			WHERE table_schema = DATABASE() AND table_name = ? AND INDEX_NAME != 'PRIMARY'
+			GROUP BY INDEX_NAME`,
 			[tableName],
 		);
 
 		return rows.map((row) => ({
-			name: row.index_name,
-			columns: row.columns.split(","),
-			unique: row.is_unique === 1,
+			name: row.INDEX_NAME,
+			columns: row.COLUMNS.split(","),
+			unique: row.IS_UNIQUE === 1,
 		}));
 	}
 
@@ -515,25 +515,25 @@ export default class MySQLDriver implements Driver {
 		// Get foreign keys
 		const [fkRows] = await this.#pool.execute<mysql.RowDataPacket[]>(
 			`SELECT
-				constraint_name,
-				GROUP_CONCAT(column_name ORDER BY ordinal_position) as columns,
-				referenced_table_name,
-				GROUP_CONCAT(referenced_column_name ORDER BY ordinal_position) as ref_columns
+				CONSTRAINT_NAME,
+				GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) as COLUMNS,
+				REFERENCED_TABLE_NAME,
+				GROUP_CONCAT(REFERENCED_COLUMN_NAME ORDER BY ORDINAL_POSITION) as REF_COLUMNS
 			FROM information_schema.key_column_usage
 			WHERE table_schema = DATABASE()
 				AND table_name = ?
-				AND referenced_table_name IS NOT NULL
-			GROUP BY constraint_name, referenced_table_name`,
+				AND REFERENCED_TABLE_NAME IS NOT NULL
+			GROUP BY CONSTRAINT_NAME, REFERENCED_TABLE_NAME`,
 			[tableName],
 		);
 
 		for (const row of fkRows) {
 			constraints.push({
-				name: row.constraint_name,
+				name: row.CONSTRAINT_NAME,
 				type: "foreign_key",
-				columns: row.columns.split(","),
-				referencedTable: row.referenced_table_name,
-				referencedColumns: row.ref_columns.split(","),
+				columns: row.COLUMNS.split(","),
+				referencedTable: row.REFERENCED_TABLE_NAME,
+				referencedColumns: row.REF_COLUMNS.split(","),
 			});
 		}
 

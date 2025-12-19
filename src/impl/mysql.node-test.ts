@@ -12,6 +12,9 @@ import {table} from "./table.js";
 import {z} from "zod";
 import {SchemaDriftError} from "./errors.js";
 
+// Connection string matching docker-compose.yml
+const MYSQL_URL = "mysql://testuser:testpass@localhost:13306/test_db";
+
 // Check if MySQL is available
 let MySQLDriver: any;
 let mysqlAvailable = false;
@@ -21,7 +24,7 @@ try {
 	MySQLDriver = module.default;
 
 	// Try to connect
-	const testDriver = new MySQLDriver("mysql://root@localhost/mysql");
+	const testDriver = new MySQLDriver(MYSQL_URL);
 	try {
 		await testDriver.run(["SELECT 1"] as any, []);
 		mysqlAvailable = true;
@@ -36,7 +39,7 @@ try {
 if (mysqlAvailable) {
 	describe("MySQLDriver Schema Management", () => {
 		test("ensureTable() creates new table", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new MySQLDriver(MYSQL_URL);
 
 			const users = table("test_users_create", {
 				id: z.number().int().db.primary(),
@@ -55,9 +58,12 @@ if (mysqlAvailable) {
 		});
 
 		test("ensureTable() detects missing unique constraint", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new MySQLDriver(MYSQL_URL);
 
 			try {
+				// Cleanup from previous runs
+				await driver.run(["DROP TABLE IF EXISTS test_users_unique"] as any, []);
+
 				// Create table without unique constraint
 				await driver.run(
 					[
@@ -83,7 +89,7 @@ if (mysqlAvailable) {
 		});
 
 		test("ensureConstraints() applies foreign key with preflight", async () => {
-			const driver = new MySQLDriver("mysql://root@localhost/mysql");
+			const driver = new MySQLDriver(MYSQL_URL);
 
 			try {
 				const users = table("test_users_fk", {
