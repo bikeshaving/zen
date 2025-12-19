@@ -8,7 +8,7 @@
  */
 
 import {describe, it, expect, afterAll, beforeAll, beforeEach} from "bun:test";
-import {Database, table, z, ident, ConstraintPreflightError} from "../zen.js";
+import {Database, table, z, ident} from "../zen.js";
 import BunDriver from "../bun.js";
 
 // =============================================================================
@@ -73,15 +73,6 @@ beforeAll(async () => {
 // =============================================================================
 // Helper to create a fresh database for each test
 // =============================================================================
-
-async function createTestDb(
-	dialect: TestDialect,
-): Promise<{driver: BunDriver; db: Database}> {
-	const driver = new BunDriver(dialect.url);
-	const db = new Database(driver);
-	await db.open(1);
-	return {driver, db};
-}
 
 // =============================================================================
 // Test definitions for each dialect

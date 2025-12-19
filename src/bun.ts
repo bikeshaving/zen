@@ -1263,9 +1263,6 @@ export default class BunDriver implements Driver {
 		const result = await this.#sql.unsafe(sql, []);
 
 		if (result.length > 0) {
-			const quotedCols = columns
-				.map((c) => quoteIdent(c, this.#dialect))
-				.join(", ");
 			const diagQuery = `SELECT t.* FROM ${quoteIdent(tableName, this.#dialect)} t WHERE ${nullChecks} AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r WHERE ${joinConditions})`;
 
 			// Count orphans
