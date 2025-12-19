@@ -50,7 +50,11 @@ export function createTemplate(
  * Check if a value is a SQL template.
  */
 export function isSQLTemplate(value: unknown): value is SQLTemplate {
-	return Array.isArray(value) && SQL_TEMPLATE in value;
+	return (
+		Array.isArray(value) &&
+		Object.prototype.hasOwnProperty.call(value, SQL_TEMPLATE) &&
+		(value as any)[SQL_TEMPLATE] === true
+	);
 }
 
 // ============================================================================

@@ -1569,6 +1569,18 @@ function createTableObject(
 				throw new Error("values() requires at least one column");
 			}
 
+			// Validate that all columns exist in the schema
+			const schemaKeys = Object.keys(schema.shape);
+			for (const col of columns) {
+				if (!schemaKeys.includes(col)) {
+					throw new TableDefinitionError(
+						`Column "${col}" does not exist in table schema`,
+						name,
+						col,
+					);
+				}
+			}
+
 			const partialSchema = schema.partial();
 			const strings: string[] = ["("];
 			const templateValues: unknown[] = [];
