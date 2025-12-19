@@ -9,7 +9,7 @@
  */
 
 import {isSQLIdentifier} from "./template.js";
-import {isSQLBuiltin} from "./database.js";
+import {isSQLBuiltin, resolveSQLBuiltin} from "./builtins.js";
 
 // ============================================================================
 // Types
@@ -43,16 +43,8 @@ export function placeholder(index: number, dialect: SQLDialect): string {
 	return "?";
 }
 
-/**
- * Resolve a SQL builtin symbol to its SQL representation.
- */
-export function resolveSQLBuiltin(sym: symbol): string {
-	const key = Symbol.keyFor(sym);
-	if (!key?.startsWith("@b9g/zen:")) {
-		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
-	}
-	return key.slice("@b9g/zen:".length);
-}
+// Re-export for consumers that import from sql.ts
+export {resolveSQLBuiltin} from "./builtins.js";
 
 /**
  * Render a template to SQL string with parameters.
