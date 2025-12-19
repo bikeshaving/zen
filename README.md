@@ -1,4 +1,4 @@
-# Zen
+# ZenDB
 The simple database client.
 
 Define tables. Write SQL. Get objects.
@@ -33,6 +33,7 @@ const mySQLDriver = new MySQLDriver("mysql://localhost/mydb");
 
 // Bun auto-detects dialect from the connection URL.
 const bunDriver = new BunDriver("sqlite://app.db");
+
 const db = new Database(bunDriver);
 ```
 
@@ -54,7 +55,7 @@ const Users = table("users", {
 
 const Posts = table("posts", {
   id: z.string().uuid().db.primary(),
-  authorId: z.string().uuid().db.references(Users, {as: "author"}),
+  authorId: z.string().uuid().db.references(Users, "author"),
   title: z.string(),
   published: z.boolean().default(false),
 });
@@ -95,7 +96,7 @@ const user = await db.insert(Users, {
 
 // 4. Query with normalization
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
   WHERE ${Posts.where({published: true})}
 `;
 
@@ -126,7 +127,7 @@ const Posts = table("posts", {
   id: z.string().uuid().db.primary(),
   title: z.string(),
   content: z.string().optional(),
-  authorId: z.string().uuid().db.references(Users, {as: "author", onDelete: "cascade"}),
+  authorId: z.string().uuid().db.references(Users, "author", {onDelete: "cascade"}),
   published: z.boolean().default(false),
 });
 ```
@@ -138,7 +139,7 @@ The `.db` property is available on all Zod types imported from `@b9g/zen`. It pr
 - `.db.primary()` — Primary key
 - `.db.unique()` — Unique constraint
 - `.db.index()` — Create an index
-- `.db.references(table, {as, field?, onDelete?})` — Foreign key with resolved property name
+- `.db.references(table, as, {field?, reverseAs?, onDelete?})` — Foreign key with resolved property name
 - `.db.softDelete()` — Soft delete timestamp field
 - `.db.encode(fn)` — Custom encoding for database storage
 - `.db.decode(fn)` — Custom decoding from database storage
@@ -223,13 +224,15 @@ await db.softDelete(Users, userId);
 await db.delete(Users, userId);
 
 // Filter out soft-deleted records in queries
-const activeUsers = await db.all(Users)`WHERE NOT ${Users.deleted()}`;
+const activeUsers = await db.all(Users)`
+  WHERE NOT ${Users.deleted()}
+`;
 // → WHERE NOT "users"."deletedAt" IS NOT NULL
 ```
 
 **Compound indexes** via table options:
 ```typescript
-const Posts = table("posts", {...}, {
+const Posts = table("posts", schema, {
   indexes: [["authorId", "createdAt"]]
 });
 ```
@@ -239,8 +242,7 @@ const Posts = table("posts", {...}, {
 const Posts = table("posts", {
   id: z.string().db.primary(),
   title: z.string(),
-  authorId: z.string().db.references(Users, {
-    as: "author",
+  authorId: z.string().db.references(Users, "author", {
     reverseAs: "posts"
   }),
 }, {
@@ -252,7 +254,7 @@ const Posts = table("posts", {
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
 `;
 
 posts[0].titleUpper;  // ✅ "HELLO WORLD"
@@ -271,7 +273,7 @@ Derived properties:
 ```typescript
 const UserSummary = Users.pick("id", "name");
 const posts = await db.all([Posts, UserSummary])`
-  JOIN ${UserSummary} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${UserSummary.on(Posts)}
 `;
 // posts[0].author has only id and name
 ```
@@ -288,7 +290,7 @@ const posts = await db.all(Posts)`WHERE published = ${true}`;
 
 // Multi-table with joins — pass array
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
   WHERE ${Posts.where({published: true})}
 `;
 
@@ -325,7 +327,7 @@ await db.exec`
 
 // JOIN with on()
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
   WHERE ${Posts.cols.published} = ${true}
 `;
 // → JOIN "users" ON "users"."id" = "posts"."authorId"
@@ -338,7 +340,7 @@ await db.exec`
 
 // Qualified column names with cols
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
   ORDER BY ${Posts.cols.createdAt} DESC
 `;
 // → ORDER BY "posts"."createdAt" DESC
@@ -352,10 +354,6 @@ const posts = await db.all(Posts)`WHERE ${Posts.in("id", postIds)}`;
 const posts = await db.all(Posts)`WHERE ${Posts.in("id", [])}`;
 // → WHERE 1 = 0
 ```
-
-**Operators:** `$eq`, `$neq`, `$lt`, `$gt`, `$lte`, `$gte`, `$like`, `$in`, `$isNull`
-
-Operators are intentionally limited to simple, single-column predicates. `OR`, subqueries, and cross-table logic belong in raw SQL.
 
 ## CRUD Helpers
 
@@ -478,29 +476,9 @@ if (e.oldVersion < 5) {
 }
 ```
 
-## DDL Generation
-
-Generate CREATE TABLE from Zod schemas:
-
-```typescript
-const ddl = Users.ddl({ dialect: "postgresql" });
-// CREATE TABLE IF NOT EXISTS "users" (
-//   "id" TEXT NOT NULL PRIMARY KEY,
-//   "email" TEXT NOT NULL UNIQUE,
-//   "name" VARCHAR(100) NOT NULL,
-//   "role" TEXT DEFAULT 'user',
-//   "created_at" TIMESTAMPTZ DEFAULT NOW()
-// );
-```
-
-Foreign key constraints are generated automatically:
-
-```typescript
-const ddl = Posts.ddl();
-// FOREIGN KEY ("author_id") REFERENCES "users"("id") ON DELETE CASCADE
-```
-
 **Dialect support:**
+
+### Default column types
 
 | Feature | SQLite | PostgreSQL | MySQL |
 |---------|--------|------------|-------|
@@ -525,12 +503,12 @@ The `all()`/`get()` methods:
 ```typescript
 const Posts = table("posts", {
   id: z.string().db.primary(),
-  authorId: z.string().db.references(Users, {as: "author"}),
+  authorId: z.string().db.references(Users, "author"),
   title: z.string(),
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
 `;
 // posts[0].author = {id: "u1", name: "Alice"}
 ```
@@ -542,15 +520,14 @@ Use `reverseAs` to populate arrays of referencing entities:
 ```typescript
 const Posts = table("posts", {
   id: z.string().db.primary(),
-  authorId: z.string().db.references(Users, {
-    as: "author",
+  authorId: z.string().db.references(Users, "author", {
     reverseAs: "posts" // Populate author.posts = Post[]
   }),
   title: z.string(),
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
 `;
 // posts[0].author.posts = [{id: "p1", ...}, {id: "p2", ...}]
 ```
@@ -572,13 +549,13 @@ const Tags = table("tags", {
 
 const PostTags = table("post_tags", {
   id: z.string().db.primary(),
-  postId: z.string().db.references(Posts, {as: "post", reverseAs: "postTags"}),
-  tagId: z.string().db.references(Tags, {as: "tag", reverseAs: "postTags"}),
+  postId: z.string().db.references(Posts, "post", {reverseAs: "postTags"}),
+  tagId: z.string().db.references(Tags, "tag", {reverseAs: "postTags"}),
 });
 
 const results = await db.all([PostTags, Posts, Tags])`
-  JOIN ${Posts} ON ${PostTags.on("postId")}
-  JOIN ${Tags} ON ${PostTags.on("tagId")}
+  JOIN "posts" ON ${Posts.on(PostTags)}
+  JOIN "tags" ON ${Tags.on(PostTags)}
   WHERE ${Posts.where({id: postId})}
 `;
 
@@ -596,25 +573,25 @@ References and derived properties have specific serialization behavior to preven
 
 ```typescript
 const posts = await db.all([Posts, Users])`
-  JOIN ${Users} ON ${Posts.on("authorId")}
+  JOIN "users" ON ${Users.on(Posts)}
 `;
 
 const post = posts[0];
 
 // Forward references (belongs-to): enumerable and immutable
-Object.keys(post);  // ["id", "title", "authorId", "author"]
-JSON.stringify(post);  // ✅ Includes "author"
-post.author = {...};  // ❌ TypeError (immutable)
+Object.keys(post);    // ["id", "title", "authorId", "author"]
+JSON.stringify(post); // Includes "author"
+post.author = {...};  // TypeError (immutable)
 
 // Reverse references (has-many): non-enumerable and immutable
 const author = post.author;
-Object.keys(author);  // ["id", "name"] (no "posts")
-JSON.stringify(author);  // ✅ Excludes "posts" (prevents circular JSON)
-author.posts;  // ✅ Accessible (just hidden from enumeration)
-author.posts = [];  // ❌ TypeError (immutable)
+Object.keys(author);    // ["id", "name"] (no "posts")
+JSON.stringify(author); // Excludes "posts" (prevents circular JSON)
+author.posts;           // Accessible (just hidden from enumeration)
+author.posts = [];      // TypeError (immutable)
 
 // Circular references are safe:
-JSON.stringify(post);  // ✅ No error
+JSON.stringify(post); // No error
 // {
 //   "id": "p1",
 //   "title": "Hello",
@@ -624,7 +601,7 @@ JSON.stringify(post);  // ✅ No error
 
 // Explicit inclusion when needed:
 const explicit = {...author, posts: author.posts};
-JSON.stringify(explicit);  // ✅ Now includes posts
+JSON.stringify(explicit);  // Now includes posts
 ```
 
 **Why this design:**

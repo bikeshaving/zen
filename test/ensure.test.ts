@@ -184,7 +184,7 @@ for (const dialect of dialects) {
 
 				const Posts = table(`pfk_${runId}_${testId}`, {
 					id: stringId().db.primary(),
-					authorId: stringField().db.references(Users, {as: "author"}),
+					authorId: stringField().db.references(Users, "author"),
 					title: z.string(),
 				});
 
@@ -388,7 +388,7 @@ for (const dialect of dialects) {
 				const PostsWithFK = table(`posts_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					title: stringField(),
-					authorId: stringId().db.references(Authors, {as: "author"}),
+					authorId: stringId().db.references(Authors, "author"),
 				});
 
 				await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
@@ -425,7 +425,7 @@ for (const dialect of dialects) {
 				const PostsWithFK = table(`posts_clean_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					title: stringField(),
-					authorId: stringId().db.references(Authors, {as: "author"}),
+					authorId: stringId().db.references(Authors, "author"),
 				});
 
 				const result = await db.ensureConstraints(PostsWithFK);
@@ -613,7 +613,7 @@ for (const dialect of dialects) {
 				const PostsWithFK = table(`posts_quoted_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					title: stringField(),
-					"author-id": stringId().db.references(Authors, {as: "author"}),
+					"author-id": stringId().db.references(Authors, "author"),
 				});
 
 				await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({

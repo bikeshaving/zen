@@ -588,7 +588,7 @@ for (const dialect of dialects) {
 
 				const Posts = table(`fk_posts_${runId}_${testId}`, {
 					id: stringId().db.primary(),
-					authorId: stringField().db.references(Users, {as: "author"}),
+					authorId: stringField().db.references(Users, "author"),
 					title: stringField(),
 				});
 
@@ -617,7 +617,7 @@ for (const dialect of dialects) {
 
 				const Articles = table(`fk_articles_${runId}_${testId}`, {
 					id: stringId().db.primary(),
-					authorId: stringField().db.references(Authors, {as: "author"}),
+					authorId: stringField().db.references(Authors, "author"),
 					title: stringField(),
 				});
 

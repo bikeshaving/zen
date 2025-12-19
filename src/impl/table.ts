@@ -8,7 +8,7 @@
 import {z, ZodType, ZodObject, ZodRawShape} from "zod";
 
 import {TableDefinitionError} from "./errors.js";
-import {isSQLBuiltin, type SQLBuiltin} from "./builtins.js";
+import {isSQLBuiltin, NOW, type SQLBuiltin} from "./builtins.js";
 import {
 	ident,
 	makeTemplate,
@@ -292,6 +292,23 @@ function hasZodDefault(schema: ZodType): boolean {
 }
 
 /**
+ * Detect if a ZodString schema has .uuid() format.
+ */
+function isUuidSchema(schema: ZodType): boolean {
+	return schema instanceof z.ZodString && (schema as any).format === "uuid";
+}
+
+/**
+ * Detect if a ZodNumber schema has .int() modifier.
+ */
+function isIntSchema(schema: ZodType): boolean {
+	if (!(schema instanceof z.ZodNumber)) return false;
+	const checks = (schema as any)._def?.checks;
+	if (!Array.isArray(checks)) return false;
+	return checks.some((c: any) => c.isInt === true);
+}
+
+/**
  * Create the .db methods object that will be added to all Zod schemas.
  * This is shared across all types and bound to the schema instance.
  */
@@ -334,20 +351,20 @@ function createDBMethods(schema: ZodType) {
 		 *
 		 * @example
 		 * // Forward reference only
-		 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+		 * authorId: z.string().uuid().db.references(Users, "author")
 		 *
 		 * @example
-		 * // With reverse relationship
-		 * authorId: z.string().uuid().db.references(Users, {
-		 *   as: "author",      // post.author = User
-		 *   reverseAs: "posts" // user.posts = Post[]
+		 * // With options
+		 * authorId: z.string().uuid().db.references(Users, "author", {
+		 *   reverseAs: "posts",   // user.posts = Post[]
+		 *   ondelete: "cascade",
 		 * })
 		 */
 		references(
 			table: Table<any>,
-			options: {
+			as: string,
+			options?: {
 				field?: string;
-				as: string;
 				reverseAs?: string;
 				onDelete?: "cascade" | "set null" | "restrict";
 			},
@@ -355,10 +372,8 @@ function createDBMethods(schema: ZodType) {
 			return setDBMeta(schema, {
 				reference: {
 					table,
-					field: options.field,
-					as: options.as,
-					reverseAs: options.reverseAs,
-					onDelete: options.onDelete,
+					as,
+					...options,
 				},
 			});
 		},
@@ -654,12 +669,69 @@ function createDBMethods(schema: ZodType) {
 		 *
 		 * @example
 		 * id: z.number().db.primary().db.autoIncrement()
+		 *
+		 * @deprecated Use .db.auto() instead, which detects the type automatically.
 		 */
 		autoIncrement() {
 			// Preserve existing db metadata when wrapping with optional
 			const existing = getDBMeta(schema);
 			const optionalSchema = schema.optional();
 			return setDBMeta(optionalSchema, {...existing, autoIncrement: true});
+		},
+
+		/**
+		 * Auto-generate value on insert based on field type.
+		 *
+		 * Type-aware behavior:
+		 * - `z.string().uuid()` → generates UUID via `crypto.randomUUID()`
+		 * - `z.number().int()` on primary key → auto-increment (database-side)
+		 * - `z.date()` → current timestamp via NOW
+		 *
+		 * Field becomes optional for insert.
+		 *
+		 * @example
+		 * id: z.string().uuid().db.primary().db.auto()
+		 * // → crypto.randomUUID() on insert
+		 *
+		 * @example
+		 * id: z.number().int().db.primary().db.auto()
+		 * // → auto-increment
+		 *
+		 * @example
+		 * createdAt: z.date().db.auto()
+		 * // → NOW on insert
+		 */
+		auto() {
+			const existing = getDBMeta(schema);
+			const optionalSchema = schema.optional();
+
+			// UUID string → crypto.randomUUID()
+			if (isUuidSchema(schema)) {
+				const insertedMeta = {
+					type: "function" as const,
+					fn: () => crypto.randomUUID(),
+				};
+				return setDBMeta(optionalSchema, {...existing, inserted: insertedMeta});
+			}
+
+			// Integer (typically primary key) → autoIncrement
+			if (isIntSchema(schema)) {
+				return setDBMeta(optionalSchema, {...existing, autoIncrement: true});
+			}
+
+			// Date → NOW
+			if (schema instanceof z.ZodDate) {
+				const insertedMeta = {
+					type: "symbol" as const,
+					symbol: NOW,
+				};
+				return setDBMeta(optionalSchema, {...existing, inserted: insertedMeta});
+			}
+
+			throw new Error(
+				`.db.auto() is not supported for this type. ` +
+					`Supported: z.string().uuid(), z.number().int(), z.date()`,
+			);
 		},
 	};
 }
@@ -1029,17 +1101,39 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	set(values: SetValues<Table<T>>): SQLTemplate;
 
 	/**
-	 * Generate foreign-key equality fragment for JOIN ON clauses.
+	 * Generate the ON condition for a JOIN clause (FK equality).
 	 *
-	 * Emits fully qualified, quoted column names.
+	 * Called on the table being joined, with the referencing table as argument.
+	 * Looks up foreign keys in the referencing table that point to this table.
+	 * Returns just the equality condition; you write the JOIN clause.
+	 *
+	 * @param referencingTable - The table that has a foreign key to this table
+	 * @param alias - Optional relationship alias (the "as" name) to disambiguate
+	 *                when multiple FKs point to the same table
 	 *
 	 * @example
-	 * db.all(Posts, Users)`
-	 *   JOIN users ON ${Posts.on("authorId")}
+	 * // Single FK - no disambiguation needed
+	 * db.all([Posts, Users])`
+	 *   JOIN "users" ON ${Users.on(Posts)}
+	 *   WHERE ${Posts.where({published: true})}
 	 * `
-	 * // → JOIN users ON "users"."id" = "posts"."authorId"
+	 * // → JOIN "users" ON "users"."id" = "posts"."authorId" WHERE ...
+	 *
+	 * @example
+	 * // Multiple FKs to same table - use alias to disambiguate
+	 * const Posts = table("posts", {
+	 *   authorId: z.string().db.references(Users, "author"),
+	 *   editorId: z.string().db.references(Users, "editor"),
+	 * });
+	 * db.all([Posts, Users])`
+	 *   JOIN "users" AS "author" ON ${Users.on(Posts, "author")}
+	 *   JOIN "users" AS "editor" ON ${Users.on(Posts, "editor")}
+	 *   WHERE ...
+	 * `
+	 * // → JOIN "users" AS "author" ON "users"."id" = "posts"."authorId"
+	 * //   JOIN "users" AS "editor" ON "users"."id" = "posts"."editorId" WHERE ...
 	 */
-	on(field: keyof z.infer<ZodObject<T>> & string): SQLTemplate;
+	on(referencingTable: Table<any>, alias?: string): SQLTemplate;
 
 	/**
 	 * Generate column list and value tuples for INSERT statements.
@@ -1538,24 +1632,54 @@ function createTableObject(
 			return createTemplate(makeTemplate(strings), templateValues);
 		},
 
-		on(field: string): SQLTemplate {
-			const ref = meta.references.find((r) => r.fieldName === field);
+		on(referencingTable: Table<any>, alias?: string): SQLTemplate {
+			// Find FKs in the referencing table that point to this table
+			const refs = referencingTable.meta.references.filter(
+				(r) => r.table.name === name,
+			);
 
-			if (!ref) {
+			if (refs.length === 0) {
 				throw new Error(
-					`Field "${field}" is not a foreign key reference in table "${name}"`,
+					`Table "${referencingTable.name}" has no foreign key references to "${name}"`,
 				);
 			}
 
-			// Build template: ref_table.ref_field = this_table.fk_field
-			// strings: ["", ".", " = ", ".", ""]
-			// values: [ident(ref.table.name), ident(ref.referencedField), ident(name), ident(field)]
-			return createTemplate(makeTemplate(["", ".", " = ", ".", ""]), [
-				ident(ref.table.name),
-				ident(ref.referencedField),
-				ident(name),
-				ident(field),
-			]);
+			let ref: ReferenceInfo;
+			if (refs.length === 1) {
+				ref = refs[0];
+			} else if (alias) {
+				// Disambiguate by "as" alias
+				const found = refs.find((r) => r.as === alias);
+				if (!found) {
+					const availableAliases = refs.map((r) => `"${r.as}"`).join(", ");
+					throw new Error(
+						`No foreign key with alias "${alias}" found. Available aliases: ${availableAliases}`,
+					);
+				}
+				ref = found;
+			} else {
+				const availableAliases = refs.map((r) => `"${r.as}"`).join(", ");
+				throw new Error(
+					`Multiple foreign keys from "${referencingTable.name}" to "${name}". ` +
+						`Specify an alias: ${availableAliases}`,
+				);
+			}
+
+			// Build template: table_or_alias.pk = ref_table.fk_field
+			// Without alias: "users"."id" = "posts"."authorId"
+			// With alias:    "author"."id" = "posts"."authorId"
+			// Users write the JOIN clause: JOIN "users" ON ${Users.on(Posts)}
+			// For self-joins with aliases: JOIN "users" AS "author" ON ${Users.on(Posts, "author")}
+			const tableRef = alias ?? name;
+			return createTemplate(
+				makeTemplate(["", ".", " = ", ".", ""]),
+				[
+					ident(tableRef),
+					ident(ref.referencedField),
+					ident(referencingTable.name),
+					ident(ref.fieldName),
+				],
+			);
 		},
 
 		values(rows: Record<string, unknown>[]): SQLTemplate {
@@ -1801,9 +1925,18 @@ function extractFieldMeta(
 // ============================================================================
 
 /**
- * Infer the TypeScript type from a table (full document after read).
+ * Infer the row type from a table (full entity after read).
+ *
+ * @example
+ * const Users = table("users", {...});
+ * type User = Row<typeof Users>;
  */
-export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
+export type Row<T extends Table<any>> = z.infer<T["schema"]>;
+
+/**
+ * @deprecated Use `Row<T>` instead.
+ */
+export type Infer<T extends Table<any>> = Row<T>;
 
 /**
  * Type guard that evaluates to `never` for partial or derived tables.
@@ -1813,7 +1946,7 @@ export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
  * function insert<T extends Table<any>>(
  *   table: T & FullTableOnly<T>,
  *   data: Insert<T>
- * ): Promise<Infer<T>>
+ * ): Promise<Row<T>>
  */
 export type FullTableOnly<T> = T extends {meta: {isPartial: true}}
 	? never
@@ -1822,14 +1955,35 @@ export type FullTableOnly<T> = T extends {meta: {isPartial: true}}
 		: T;
 
 /**
- * Infer the insert type (respects defaults).
+ * Infer the insert type (respects defaults and .db.auto() fields).
  * Returns `never` for partial or derived tables to prevent insert at compile time.
+ *
+ * @example
+ * const Users = table("users", {...});
+ * type NewUser = Insert<typeof Users>;
  */
 export type Insert<T extends Table<any>> = T extends {meta: {isPartial: true}}
 	? never
 	: T extends {meta: {isDerived: true}}
 		? never
 		: z.input<T["schema"]>;
+
+/**
+ * Infer the update type (all fields optional, excludes primary key and insert-only fields).
+ * Returns `never` for partial or derived tables to prevent update at compile time.
+ *
+ * Note: This is a simplified version that makes all fields optional.
+ * Primary key exclusion and insert-only field exclusion require runtime enforcement.
+ *
+ * @example
+ * const Users = table("users", {...});
+ * type EditUser = Update<typeof Users>;
+ */
+export type Update<T extends Table<any>> = T extends {meta: {isPartial: true}}
+	? never
+	: T extends {meta: {isDerived: true}}
+		? never
+		: Partial<z.input<T["schema"]>>;
 
 // ============================================================================
 // TypeScript Declarations for .db namespace
@@ -1869,20 +2023,20 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 *
 	 * @example
 	 * // Forward reference only
-	 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+	 * authorId: z.string().uuid().db.references(Users, "author")
 	 *
 	 * @example
-	 * // With reverse relationship
-	 * authorId: z.string().uuid().db.references(Users, {
-	 *   as: "author",      // post.author = User
-	 *   reverseAs: "posts" // user.posts = Post[]
+	 * // With options
+	 * authorId: z.string().uuid().db.references(Users, "author", {
+	 *   reverseAs: "posts",   // user.posts = Post[]
+	 *   ondelete: "cascade",
 	 * })
 	 */
 	references(
 		table: Table<any>,
-		options: {
+		as: string,
+		options?: {
 			field?: string;
-			as: string;
 			reverseAs?: string;
 			onDelete?: "cascade" | "set null" | "restrict";
 		},
@@ -2013,8 +2167,34 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 *
 	 * @example
 	 * id: z.number().int().db.primary().db.autoIncrement()
+	 *
+	 * @deprecated Use .db.auto() instead, which detects the type automatically.
 	 */
 	autoIncrement(): Schema;
+
+	/**
+	 * Auto-generate value on insert based on field type.
+	 *
+	 * Type-aware behavior:
+	 * - `z.string().uuid()` → generates UUID via `crypto.randomUUID()`
+	 * - `z.number().int()` → auto-increment (database-side)
+	 * - `z.date()` → current timestamp via NOW
+	 *
+	 * Field becomes optional for insert.
+	 *
+	 * @example
+	 * id: z.string().uuid().db.primary().db.auto()
+	 * // → crypto.randomUUID() on insert
+	 *
+	 * @example
+	 * id: z.number().int().db.primary().db.auto()
+	 * // → auto-increment
+	 *
+	 * @example
+	 * createdAt: z.date().db.auto()
+	 * // → NOW on insert
+	 */
+	auto(): Schema;
 }
 
 declare module "zod" {

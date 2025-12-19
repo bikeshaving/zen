@@ -22,7 +22,7 @@ const users = table("users", {
 
 const posts = table("posts", {
 	id: z.string().uuid().db.primary(),
-	authorId: z.string().uuid().db.references(users, {as: "author"}),
+	authorId: z.string().uuid().db.references(users, "author"),
 	title: z.string(),
 	body: z.string(),
 	published: z.boolean(),

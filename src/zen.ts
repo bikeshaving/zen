@@ -21,8 +21,11 @@ export {
 	table,
 	type Table,
 	type TableOptions,
-	type Infer,
+	type Row,
 	type Insert,
+	type Update,
+	/** @deprecated Use `Row<T>` instead */
+	type Infer,
 	type FieldMeta,
 	type FieldType,
 } from "./impl/table.js";

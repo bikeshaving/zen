@@ -23,7 +23,7 @@ const users = table("users", {
 
 const posts = table("posts", {
 	id: z.string().db.primary(),
-	authorId: z.string().db.references(users, {as: "author"}),
+	authorId: z.string().db.references(users, "author"),
 	title: z.string(),
 	body: z.string(),
 });
@@ -314,7 +314,7 @@ describe("circular references", () => {
 		const circularPosts = table("posts", {
 			id: z.string().db.primary(),
 			title: z.string(),
-			authorId: z.string().db.references(circularUsers, {as: "author"}),
+			authorId: z.string().db.references(circularUsers, "author"),
 		});
 
 		// Note: Can't actually create circular references() at definition time
@@ -354,7 +354,7 @@ describe("circular references", () => {
 		const postsTable = table("posts", {
 			id: z.string().db.primary(),
 			title: z.string(),
-			authorId: z.string().db.references(usersTable, {as: "author"}),
+			authorId: z.string().db.references(usersTable, "author"),
 		});
 
 		const rows = [
@@ -392,13 +392,13 @@ describe("deep nesting (3+ tables)", () => {
 		const deepUsers = table("users", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			orgId: z.string().db.references(orgs, {as: "organization"}),
+			orgId: z.string().db.references(orgs, "organization"),
 		});
 
 		const deepPosts = table("posts", {
 			id: z.string().db.primary(),
 			title: z.string(),
-			authorId: z.string().db.references(deepUsers, {as: "author"}),
+			authorId: z.string().db.references(deepUsers, "author"),
 		});
 
 		const rows = [
@@ -448,19 +448,19 @@ describe("deep nesting (3+ tables)", () => {
 		const cities = table("cities", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			countryId: z.string().db.references(countries, {as: "country"}),
+			countryId: z.string().db.references(countries, "country"),
 		});
 
 		const offices = table("offices", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			cityId: z.string().db.references(cities, {as: "city"}),
+			cityId: z.string().db.references(cities, "city"),
 		});
 
 		const employees = table("employees", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			officeId: z.string().db.references(offices, {as: "office"}),
+			officeId: z.string().db.references(offices, "office"),
 		});
 
 		const rows = [
@@ -609,7 +609,7 @@ describe("type coercion", () => {
 
 		const articles = table("articles", {
 			id: z.string().db.primary(),
-			authorId: z.string().db.references(authors, {as: "author"}),
+			authorId: z.string().db.references(authors, "author"),
 			title: z.string(),
 			publishedAt: z.coerce.date(),
 			viewCount: z.coerce.number().int(),
@@ -644,8 +644,7 @@ describe("reverse relationships (has-many)", () => {
 
 		const books = table("books", {
 			id: z.string().db.primary(),
-			authorId: z.string().db.references(authors, {
-				as: "author",
+			authorId: z.string().db.references(authors, "author", {
 				reverseAs: "books",
 			}),
 			title: z.string(),
@@ -692,8 +691,7 @@ describe("reverse relationships (has-many)", () => {
 
 		const books = table("books", {
 			id: z.string().db.primary(),
-			authorId: z.string().db.references(authors, {
-				as: "author",
+			authorId: z.string().db.references(authors, "author", {
 				reverseAs: "books",
 			}),
 			title: z.string(),
@@ -733,8 +731,7 @@ describe("reverse relationships (has-many)", () => {
 
 		const books = table("books", {
 			id: z.string().db.primary(),
-			authorId: z.string().nullable().db.references(authors, {
-				as: "author",
+			authorId: z.string().nullable().db.references(authors, "author", {
 				reverseAs: "books",
 			}),
 			title: z.string(),
@@ -774,12 +771,10 @@ describe("reverse relationships (has-many)", () => {
 
 		const posts = table("posts", {
 			id: z.string().db.primary(),
-			authorId: z.string().db.references(users, {
-				as: "author",
+			authorId: z.string().db.references(users, "author", {
 				reverseAs: "authoredPosts",
 			}),
-			editorId: z.string().nullable().db.references(users, {
-				as: "editor",
+			editorId: z.string().nullable().db.references(users, "editor", {
 				reverseAs: "editedPosts",
 			}),
 			title: z.string(),
@@ -835,8 +830,8 @@ describe("reverse relationships (has-many)", () => {
 			id: z.string().db.primary(), // Add primary key for join table
 			postId: z
 				.string()
-				.db.references(posts, {as: "post", reverseAs: "postTags"}),
-			tagId: z.string().db.references(tags, {as: "tag", reverseAs: "postTags"}),
+				.db.references(posts, "post", {reverseAs: "postTags"}),
+			tagId: z.string().db.references(tags, "tag", {reverseAs: "postTags"}),
 		});
 
 		const rows = [
@@ -893,13 +888,12 @@ describe("many-to-many relationships (comprehensive)", () => {
 
 	const postTagsTable = table("post_tags", {
 		id: z.string().db.primary(),
-		postId: z.string().db.references(postsTable, {
-			as: "post",
+		postId: z.string().db.references(postsTable, "post", {
 			reverseAs: "postTags",
 		}),
 		tagId: z
 			.string()
-			.db.references(tagsTable, {as: "tag", reverseAs: "postTags"}),
+			.db.references(tagsTable, "tag", {reverseAs: "postTags"}),
 	});
 
 	test("query from posts side - get all tags for posts", () => {
@@ -1077,24 +1071,20 @@ describe("many-to-many relationships (comprehensive)", () => {
 		// Users can be members or admins of projects
 		const projectMembersTable = table("project_members", {
 			id: z.string().db.primary(),
-			userId: z.string().db.references(usersTable, {
-				as: "user",
+			userId: z.string().db.references(usersTable, "user", {
 				reverseAs: "memberships",
 			}),
-			projectId: z.string().db.references(projectsTable, {
-				as: "project",
+			projectId: z.string().db.references(projectsTable, "project", {
 				reverseAs: "members",
 			}),
 		});
 
 		const projectAdminsTable = table("project_admins", {
 			id: z.string().db.primary(),
-			userId: z.string().db.references(usersTable, {
-				as: "user",
+			userId: z.string().db.references(usersTable, "user", {
 				reverseAs: "adminships",
 			}),
-			projectId: z.string().db.references(projectsTable, {
-				as: "project",
+			projectId: z.string().db.references(projectsTable, "project", {
 				reverseAs: "admins",
 			}),
 		});
@@ -1154,12 +1144,10 @@ describe("many-to-many relationships (comprehensive)", () => {
 
 		const followsTable = table("follows", {
 			id: z.string().db.primary(),
-			followerId: z.string().db.references(usersTable, {
-				as: "follower",
+			followerId: z.string().db.references(usersTable, "follower", {
 				reverseAs: "following",
 			}),
-			followeeId: z.string().db.references(usersTable, {
-				as: "followee",
+			followeeId: z.string().db.references(usersTable, "followee", {
 				reverseAs: "followers",
 			}),
 		});
@@ -1280,12 +1268,10 @@ describe("many-to-many relationships (comprehensive)", () => {
 
 		const castTable = table("cast", {
 			id: z.string().db.primary(),
-			movieId: z.string().db.references(moviesTable, {
-				as: "movie",
+			movieId: z.string().db.references(moviesTable, "movie", {
 				reverseAs: "cast",
 			}),
-			actorId: z.string().db.references(actorsTable, {
-				as: "actor",
+			actorId: z.string().db.references(actorsTable, "actor", {
 				reverseAs: "filmography",
 			}),
 			role: z.string(), // Additional metadata on join table
@@ -1342,8 +1328,7 @@ describe("reverse relationship validation", () => {
 		expect(() =>
 			table("posts", {
 				id: z.string().db.primary(),
-				authorId: z.string().db.references(users, {
-					as: "author",
+				authorId: z.string().db.references(users, "author", {
 					reverseAs: "name", // Collides with users.name!
 				}),
 			}),
@@ -1360,9 +1345,8 @@ describe("reverse relationship validation", () => {
 			table("posts", {
 				id: z.string().db.primary(),
 				title: z.string(),
-				authorId: z.string().db.references(users, {
-					as: "title", // Collides with posts.title!
-				}),
+				// "title" collides with posts.title!
+				authorId: z.string().db.references(users, "title"),
 			}),
 		).toThrow(/reference property "title".*collides/i);
 	});
@@ -1381,8 +1365,7 @@ describe("enumerability and serialization", () => {
 	const posts = table("posts", {
 		id: z.string().db.primary(),
 		title: z.string(),
-		authorId: z.string().db.references(users, {
-			as: "author",
+		authorId: z.string().db.references(users, "author", {
 			reverseAs: "posts",
 		}),
 	});
@@ -1392,8 +1375,7 @@ describe("enumerability and serialization", () => {
 		{
 			id: z.string().db.primary(),
 			title: z.string(),
-			authorId: z.string().db.references(users, {
-				as: "author",
+			authorId: z.string().db.references(users, "author", {
 				reverseAs: "posts",
 			}),
 		},
@@ -1704,8 +1686,7 @@ describe("enumerability and serialization", () => {
 		const postsNullable = table("posts", {
 			id: z.string().db.primary(),
 			title: z.string(),
-			authorId: z.string().nullable().db.references(users, {
-				as: "author",
+			authorId: z.string().nullable().db.references(users, "author", {
 				reverseAs: "posts",
 			}),
 		});

@@ -195,7 +195,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {as: "author"}),
+			authorId: z.string().uuid().db.references(users, "author"),
 			title: z.string(),
 		});
 
@@ -206,7 +206,7 @@ describe("DDL generation", () => {
 		);
 	});
 
-	test("foreign key with onDelete cascade", () => {
+	test("foreign key with ondelete cascade", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			name: z.string(),
@@ -214,8 +214,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "cascade",
 			}),
 			title: z.string(),
@@ -228,7 +227,7 @@ describe("DDL generation", () => {
 		);
 	});
 
-	test("foreign key with onDelete set null", () => {
+	test("foreign key with ondelete set null", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			name: z.string(),
@@ -236,8 +235,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().nullable().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().nullable().db.references(users, "author", {
 				onDelete: "set null",
 			}),
 			title: z.string(),
@@ -250,7 +248,7 @@ describe("DDL generation", () => {
 		);
 	});
 
-	test("foreign key with onDelete restrict", () => {
+	test("foreign key with ondelete restrict", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			name: z.string(),
@@ -258,8 +256,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "restrict",
 			}),
 			title: z.string(),
@@ -285,12 +282,10 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "cascade",
 			}),
-			categoryId: z.string().uuid().nullable().db.references(categories, {
-				as: "category",
+			categoryId: z.string().uuid().nullable().db.references(categories, "category", {
 				onDelete: "set null",
 			}),
 			title: z.string(),
@@ -315,9 +310,8 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorEmail: z.string().email().db.references(users, {
+			authorEmail: z.string().email().db.references(users, "author", {
 				field: "email",
-				as: "author",
 			}),
 			title: z.string(),
 		});
@@ -337,8 +331,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "cascade",
 			}),
 			title: z.string(),
@@ -359,8 +352,7 @@ describe("DDL generation", () => {
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.references(users, {
-				as: "author",
+			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "cascade",
 			}),
 			title: z.string(),

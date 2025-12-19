@@ -286,7 +286,7 @@ describe("Table.pick()", () => {
 
 	const Posts = table("posts", {
 		id: z.string().uuid().db.primary(),
-		authorId: z.string().uuid().db.references(Users, {as: "author"}),
+		authorId: z.string().uuid().db.references(Users, "author"),
 		title: z.string(),
 		body: z.string(),
 		published: z.boolean(),
@@ -987,6 +987,80 @@ describe("Schema marker validation", () => {
 				.db.decode(() => new Date())
 				.db.updated(NOW),
 		).toThrow("updated() cannot be combined with encode() or decode()");
+	});
+});
+
+// =============================================================================
+// .db.auto() type-aware auto-generation
+// =============================================================================
+
+describe(".db.auto()", () => {
+	const {getDBMeta} = require("../src/impl/table.js");
+
+	test("UUID schema sets inserted function", () => {
+		const schema = z.string().uuid().db.primary().db.auto();
+		const dbMeta = getDBMeta(schema);
+
+		expect(dbMeta.inserted).toBeDefined();
+		expect(dbMeta.inserted.type).toBe("function");
+		expect(typeof dbMeta.inserted.fn).toBe("function");
+
+		// Should generate valid UUIDs
+		const uuid = dbMeta.inserted.fn();
+		expect(uuid).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+		);
+	});
+
+	test("Integer schema sets autoIncrement", () => {
+		const schema = z.number().int().db.primary().db.auto();
+		const dbMeta = getDBMeta(schema);
+
+		expect(dbMeta.autoIncrement).toBe(true);
+	});
+
+	test("Date schema sets inserted symbol (NOW)", () => {
+		const schema = z.date().db.auto();
+		const dbMeta = getDBMeta(schema);
+
+		expect(dbMeta.inserted).toBeDefined();
+		expect(dbMeta.inserted.type).toBe("symbol");
+		expect(dbMeta.inserted.symbol).toBeDefined();
+	});
+
+	test("makes field optional", () => {
+		const uuidSchema = z.string().uuid().db.auto();
+		const intSchema = z.number().int().db.auto();
+		const dateSchema = z.date().db.auto();
+
+		// All should be optional (isOptional returns true)
+		expect(uuidSchema.isOptional()).toBe(true);
+		expect(intSchema.isOptional()).toBe(true);
+		expect(dateSchema.isOptional()).toBe(true);
+	});
+
+	test("throws for unsupported types", () => {
+		expect(() => z.string().db.auto()).toThrow(
+			".db.auto() is not supported for this type",
+		);
+		expect(() => z.number().db.auto()).toThrow(
+			".db.auto() is not supported for this type",
+		);
+		expect(() => z.boolean().db.auto()).toThrow(
+			".db.auto() is not supported for this type",
+		);
+	});
+
+	test("works in table definition", () => {
+		const Users = table("users", {
+			id: z.string().uuid().db.primary().db.auto(),
+			createdAt: z.date().db.auto(),
+			name: z.string(),
+		});
+
+		// Fields with .db.auto() should have metadata
+		expect(Users.meta.fields.id.inserted).toBeDefined();
+		expect(Users.meta.fields.createdAt.inserted).toBeDefined();
 	});
 });
 

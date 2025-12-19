@@ -17,7 +17,7 @@ const Users = table("users", {
 
 const Posts = table("posts", {
 	id: z.string().uuid().db.primary(),
-	authorId: z.string().uuid().db.references(Users, {as: "author"}),
+	authorId: z.string().uuid().db.references(Users, "author"),
 	title: z.string(),
 	published: z.boolean(),
 	viewCount: z.number().int(),
@@ -66,15 +66,65 @@ describe("Table.set()", () => {
 });
 
 describe("Table.on()", () => {
-	test("generates FK equality with qualified names", () => {
-		const {sql, params} = renderFragment(Posts.on("authorId"));
+	test("generates ON condition for JOIN clause", () => {
+		const {sql, params} = renderFragment(Users.on(Posts));
 		expect(sql).toBe('"users"."id" = "posts"."authorId"');
 		expect(params).toEqual([]);
 	});
 
-	test("throws for non-FK field", () => {
-		expect(() => Posts.on("title")).toThrow(
-			'Field "title" is not a foreign key reference in table "posts"',
+	test("throws when no FK references exist", () => {
+		expect(() => Posts.on(Users)).toThrow(
+			'Table "users" has no foreign key references to "posts"',
+		);
+	});
+
+	test("disambiguates with alias when multiple FKs to same table", () => {
+		const Editors = table("editors", {
+			id: z.string().uuid().db.primary(),
+			name: z.string(),
+		});
+
+		const Articles = table("articles", {
+			id: z.string().uuid().db.primary(),
+			authorId: z.string().uuid().db.references(Editors, "author"),
+			reviewerId: z.string().uuid().db.references(Editors, "reviewer"),
+			title: z.string(),
+		});
+
+		// Without alias - should throw
+		expect(() => Editors.on(Articles)).toThrow(
+			'Multiple foreign keys from "articles" to "editors"',
+		);
+
+		// With alias - uses alias in ON condition for self-joins
+		const {sql: authorSql} = renderFragment(Editors.on(Articles, "author"));
+		expect(authorSql).toBe(
+			'"author"."id" = "articles"."authorId"',
+		);
+
+		const {sql: reviewerSql} = renderFragment(
+			Editors.on(Articles, "reviewer"),
+		);
+		expect(reviewerSql).toBe(
+			'"reviewer"."id" = "articles"."reviewerId"',
+		);
+	});
+
+	test("throws for invalid alias", () => {
+		const Editors = table("editors", {
+			id: z.string().uuid().db.primary(),
+			name: z.string(),
+		});
+
+		const Articles = table("articles", {
+			id: z.string().uuid().db.primary(),
+			authorId: z.string().uuid().db.references(Editors, "author"),
+			reviewerId: z.string().uuid().db.references(Editors, "reviewer"),
+			title: z.string(),
+		});
+
+		expect(() => Editors.on(Articles, "nonexistent")).toThrow(
+			'No foreign key with alias "nonexistent" found',
 		);
 	});
 });

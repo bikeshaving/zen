@@ -21,7 +21,7 @@ const Users = table("users", {
 
 const Posts = table("posts", {
 	id: z.string().uuid().db.primary(),
-	authorId: z.string().uuid().db.references(Users, {as: "author"}),
+	authorId: z.string().uuid().db.references(Users, "author"),
 	title: z.string(),
 	body: z.string(),
 	published: z.boolean().db.inserted(() => false),

@@ -105,7 +105,7 @@ if (postgresAvailable) {
 				// Now try to add FK with ensureConstraints
 				const posts2 = table("test_posts_fk", {
 					id: z.number().int().db.primary(),
-					userId: z.number().int().db.references(users, {as: "author"}),
+					userId: z.number().int().db.references(users, "author"),
 				});
 
 				const result = await driver.ensureConstraints(posts2);

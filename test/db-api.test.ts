@@ -59,7 +59,7 @@ describe(".db namespace API", () => {
 
 		const Posts = table("posts", {
 			id: z.string().db.primary(),
-			authorId: z.string().db.references(Users, {as: "author"}),
+			authorId: z.string().db.references(Users, "author"),
 		});
 
 		const refs = Posts.references();
