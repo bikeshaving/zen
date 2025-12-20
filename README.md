@@ -10,11 +10,13 @@ Cultivate your data.
 ```bash
 npm install @b9g/zen zod
 
-# Install a driver (choose one):
+# In Node, install a driver (choose one):
 npm install better-sqlite3  # for SQLite
 npm install postgres        # for PostgreSQL
 npm install mysql2          # for MySQL
 
+# Bun has a driver which uses Bun.SQL
+bun install @b9g/zen zod
 ```
 
 ```typescript
