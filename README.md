@@ -550,7 +550,7 @@ The `all()`/`get()` methods:
 3. Deduplicate by primary key (same PK = same object instance)
 4. Resolve `references()` to actual entity objects (forward and reverse)
 
-**Typed relationships:** When you pass multiple tables to `db.all([Posts, Users])`, the return type includes optional relationship properties based on your `references()` declarations. TypeScript knows `posts[0].author` may exist because `Posts` has a reference to `Users`.
+**Typed relationships:** When you pass multiple tables to `db.all([Posts, Users])`, the return type includes optional relationship properties based on your `references()` declarations. They can be `null` when the foreign key is missing or the JOIN yields no row, so use optional chaining.
 
 ### Forward References (belongs-to)
 
