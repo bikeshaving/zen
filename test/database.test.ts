@@ -995,6 +995,144 @@ describe("Soft Delete", () => {
 			);
 		});
 
+		test("cascades soft delete to referencing tables with onDelete: cascade", async () => {
+			const Authors = table("authors", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const Books = table("books", {
+				id: z.string().db.primary(),
+				title: z.string(),
+				authorId: z.string().db.references(Authors, "author", {
+					onDelete: "cascade",
+				}),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const cascadeDriver = createMockDriver();
+			const cascadeDb = new Database(cascadeDriver, {tables: [Authors, Books]});
+
+			// Mock: first call is the author soft delete, second is finding books, third is soft deleting books
+			(cascadeDriver.run as any).mockImplementation(async () => 1);
+			(cascadeDriver.all as any).mockImplementation(async () => {
+				// Return a book that references this author
+				return [{id: "book-1"}];
+			});
+
+			await cascadeDb.softDelete(Authors, "author-1");
+
+			// Should have called run twice: once for author, once for book
+			expect((cascadeDriver.run as any).mock.calls.length).toBe(2);
+
+			// First call: soft delete the author
+			const [strings1, values1] = (cascadeDriver.run as any).mock.calls[0];
+			const sql1 = buildSQL(strings1, values1);
+			expect(sql1).toContain('UPDATE "authors"');
+			expect(sql1).toContain('"deletedAt" = CURRENT_TIMESTAMP');
+
+			// Second call: soft delete the book
+			const [strings2, values2] = (cascadeDriver.run as any).mock.calls[1];
+			const sql2 = buildSQL(strings2, values2);
+			expect(sql2).toContain('UPDATE "books"');
+			expect(sql2).toContain('"deletedAt" = CURRENT_TIMESTAMP');
+
+			// Should have queried for books referencing the author
+			const [selectStrings, selectValues] = (cascadeDriver.all as any).mock
+				.calls[0];
+			const selectSql = buildSQL(selectStrings, selectValues);
+			expect(selectSql).toContain('SELECT "id" FROM "books"');
+			expect(selectSql).toContain('"authorId" IN (?)');
+		});
+
+		test("does not cascade soft delete without tables option", async () => {
+			const Authors = table("authors", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			// Books is defined to establish the reference relationship but not passed to Database
+			const _Books = table("books", {
+				id: z.string().db.primary(),
+				title: z.string(),
+				authorId: z.string().db.references(Authors, "author", {
+					onDelete: "cascade",
+				}),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const noCascadeDriver = createMockDriver();
+			// No tables option - no cascading (even though _Books exists with reference)
+			const noCascadeDb = new Database(noCascadeDriver);
+
+			(noCascadeDriver.run as any).mockImplementation(async () => 1);
+
+			await noCascadeDb.softDelete(Authors, "author-1");
+
+			// Should have called run only once: just the author
+			expect((noCascadeDriver.run as any).mock.calls.length).toBe(1);
+			// all should not be called since no tables registered
+			expect((noCascadeDriver.all as any).mock.calls.length).toBe(0);
+		});
+
+		test("cascades soft delete with WHERE clause", async () => {
+			const Authors = table("authors", {
+				id: z.string().db.primary(),
+				name: z.string(),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const Books = table("books", {
+				id: z.string().db.primary(),
+				title: z.string(),
+				authorId: z.string().db.references(Authors, "author", {
+					onDelete: "cascade",
+				}),
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
+
+			const cascadeDriver = createMockDriver();
+			const cascadeDb = new Database(cascadeDriver, {tables: [Authors, Books]});
+
+			// Mock: all calls return expected data
+			(cascadeDriver.run as any).mockImplementation(async () => 1);
+			(cascadeDriver.all as any).mockImplementation(
+				async (strings: TemplateStringsArray) => {
+					const sql = strings.join("?");
+					if (sql.includes("FROM") && sql.includes("authors")) {
+						// First query: find authors matching WHERE
+						return [{id: "author-1"}];
+					}
+					// Second query: find books referencing the author
+					return [{id: "book-1"}];
+				},
+			);
+
+			await cascadeDb.softDelete(
+				Authors,
+			)`WHERE ${Authors.cols.name} = ${"Alice"}`;
+
+			// Should have:
+			// 1. SELECT to find affected author IDs (for cascade)
+			// 2. UPDATE authors SET deletedAt = ...
+			// 3. SELECT to find books referencing author
+			// 4. UPDATE books SET deletedAt = ...
+			expect((cascadeDriver.run as any).mock.calls.length).toBe(2);
+			expect((cascadeDriver.all as any).mock.calls.length).toBe(2);
+
+			// First run call: soft delete the author
+			const [strings1, values1] = (cascadeDriver.run as any).mock.calls[0];
+			const sql1 = buildSQL(strings1, values1);
+			expect(sql1).toContain('UPDATE "authors"');
+
+			// Second run call: soft delete the book
+			const [strings2, values2] = (cascadeDriver.run as any).mock.calls[1];
+			const sql2 = buildSQL(strings2, values2);
+			expect(sql2).toContain('UPDATE "books"');
+		});
+
 		test("applies updated() markers on soft delete", async () => {
 			const SoftDeleteWithUpdatedAt = table("soft_with_updated", {
 				id: z.string().db.primary(),

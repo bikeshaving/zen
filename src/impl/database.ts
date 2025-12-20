@@ -9,7 +9,12 @@ import type {Table, Row, Insert, FullTableOnly, WithRefs} from "./table.js";
 import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
-import {ident, isSQLTemplate, makeTemplate} from "./template.js";
+import {
+	createTemplate,
+	ident,
+	isSQLTemplate,
+	makeTemplate,
+} from "./template.js";
 import {EnsureError} from "./errors.js";
 
 // ============================================================================
@@ -1771,10 +1776,12 @@ export class Database extends EventTarget {
 	#driver: Driver;
 	#version: number = 0;
 	#opened: boolean = false;
+	#tables: Table<any>[] = [];
 
-	constructor(driver: Driver) {
+	constructor(driver: Driver, options?: {tables?: Table<any>[]}) {
 		super();
 		this.#driver = driver;
+		this.#tables = options?.tables ?? [];
 	}
 
 	/**
@@ -2678,7 +2685,64 @@ export class Database extends EventTarget {
 		queryValues.push(id);
 		queryStrings.push("");
 
-		return this.#driver.run(makeTemplate(queryStrings), queryValues);
+		const count = await this.#driver.run(
+			makeTemplate(queryStrings),
+			queryValues,
+		);
+
+		// Cascade soft delete to referencing tables with onDelete: "cascade"
+		// Only cascade if the parent row was actually soft deleted
+		if (count > 0) {
+			await this.#cascadeSoftDelete(table, [id]);
+		}
+
+		return count;
+	}
+
+	/**
+	 * Cascade soft delete to tables that reference the given table with onDelete: "cascade".
+	 * Only cascades to tables that have a soft delete field.
+	 */
+	async #cascadeSoftDelete<T extends Table<any>>(
+		table: T,
+		ids: (string | number)[],
+	): Promise<void> {
+		if (ids.length === 0 || this.#tables.length === 0) return;
+
+		// Find tables that reference this table with onDelete: "cascade"
+		for (const refTable of this.#tables) {
+			const refs = refTable.references();
+			for (const ref of refs) {
+				if (ref.table.name === table.name && ref.onDelete === "cascade") {
+					// Only cascade if the referencing table has soft delete
+					if (!refTable.meta.softDeleteField) continue;
+
+					// Find rows that reference the deleted IDs
+					const fkField = ref.fieldName;
+					const refPk = refTable.meta.primary;
+					if (!refPk) continue;
+
+					// Query for IDs to cascade - compose via fragments (no manual placeholders).
+					const whereIn = refTable.in(fkField, ids);
+					const selectTemplate = createTemplate(
+						makeTemplate(["SELECT ", " FROM ", " WHERE ", ""]),
+						[ident(refPk), ident(refTable.name), whereIn],
+					);
+					const {strings: selectStrings, values: selectValues} =
+						expandFragments(selectTemplate[0], selectTemplate.slice(1));
+
+					const rows = await this.#driver.all<Record<string, unknown>>(
+						selectStrings,
+						selectValues,
+					);
+
+					if (rows.length > 0) {
+						const cascadeIds = rows.map((row) => row[refPk] as string | number);
+						await this.#softDeleteByIds(refTable, cascadeIds);
+					}
+				}
+			}
+		}
 	}
 
 	async #softDeleteByIds<T extends Table<any>>(
@@ -2739,7 +2803,18 @@ export class Database extends EventTarget {
 			queryStrings.push(i < ids.length - 1 ? ", " : ")");
 		}
 
-		return this.#driver.run(makeTemplate(queryStrings), queryValues);
+		const count = await this.#driver.run(
+			makeTemplate(queryStrings),
+			queryValues,
+		);
+
+		// Cascade soft delete to referencing tables with onDelete: "cascade"
+		// Only cascade if rows were actually soft deleted
+		if (count > 0) {
+			await this.#cascadeSoftDelete(table, ids);
+		}
+
+		return count;
 	}
 
 	async #softDeleteWithWhere<T extends Table<any>>(
@@ -2748,6 +2823,7 @@ export class Database extends EventTarget {
 		templateValues: unknown[],
 	): Promise<number> {
 		const softDeleteField = table.meta.softDeleteField!;
+		const pk = table.meta.primary;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
@@ -2756,6 +2832,26 @@ export class Database extends EventTarget {
 			strings,
 			templateValues,
 		);
+
+		// If cascading is possible, first fetch the IDs that will be affected
+		let affectedIds: (string | number)[] = [];
+		if (this.#tables.length > 0 && pk) {
+			const selectStrings: string[] = ["SELECT ", " FROM ", " "];
+			const selectValues: unknown[] = [ident(pk), ident(table.name)];
+
+			// Merge WHERE template
+			selectStrings[selectStrings.length - 1] += expandedStrings[0];
+			for (let i = 1; i < expandedStrings.length; i++) {
+				selectStrings.push(expandedStrings[i]);
+			}
+			selectValues.push(...expandedValues);
+
+			const rows = await this.#driver.all<Record<string, unknown>>(
+				makeTemplate(selectStrings),
+				selectValues,
+			);
+			affectedIds = rows.map((row) => row[pk] as string | number);
+		}
 
 		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... <where>
 		const queryStrings: string[] = ["UPDATE "];
@@ -2794,7 +2890,17 @@ export class Database extends EventTarget {
 		}
 		queryValues.push(...expandedValues);
 
-		return this.#driver.run(makeTemplate(queryStrings), queryValues);
+		const count = await this.#driver.run(
+			makeTemplate(queryStrings),
+			queryValues,
+		);
+
+		// Cascade soft delete to referencing tables with onDelete: "cascade"
+		if (count > 0 && affectedIds.length > 0) {
+			await this.#cascadeSoftDelete(table, affectedIds);
+		}
+
+		return count;
 	}
 
 	// ==========================================================================
