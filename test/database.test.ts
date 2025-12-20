@@ -909,7 +909,7 @@ describe("Soft Delete", () => {
 			expect(fragment[0]).toBeDefined(); // strings
 			expect(fragment[1]).toBeDefined(); // values
 			const {sql, params} = renderFragment(fragment);
-			expect(sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
+			expect(sql).toBe('("soft_delete_users"."deletedAt" IS NOT NULL)');
 			expect(params).toEqual([]);
 		});
 
@@ -928,11 +928,11 @@ describe("Soft Delete", () => {
 			const db = new Database(driver);
 			(driver.all as any).mockImplementation(async () => []);
 
-			await db.all(SoftDeleteUsers)`WHERE NOT (${SoftDeleteUsers.deleted()})`;
+			await db.all(SoftDeleteUsers)`WHERE NOT ${SoftDeleteUsers.deleted()}`;
 
 			const [strings, values] = (driver.all as any).mock.calls[0];
 			const sql = buildSQL(strings, values);
-			expect(sql).toContain('"soft_delete_users"."deletedAt" IS NOT NULL');
+			expect(sql).toContain('("soft_delete_users"."deletedAt" IS NOT NULL)');
 		});
 	});
 
@@ -1096,7 +1096,7 @@ describe("Soft Delete", () => {
 			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
 			const fragment = PartialUsers.deleted();
 			expect(renderFragment(fragment).sql).toBe(
-				'"soft_delete_users"."deletedAt" IS NOT NULL',
+				'("soft_delete_users"."deletedAt" IS NOT NULL)',
 			);
 		});
 

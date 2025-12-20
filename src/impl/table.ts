@@ -1591,7 +1591,7 @@ function createTableObject(
 					`Table "${name}" does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
 				);
 			}
-			return createTemplate(makeTemplate(["", ".", " IS NOT NULL"]), [
+			return createTemplate(makeTemplate(["(", ".", " IS NOT NULL)"]), [
 				ident(name),
 				ident(softDeleteField),
 			]);

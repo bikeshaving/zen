@@ -253,7 +253,6 @@ await db.delete(Users, userId);
 const activeUsers = await db.all(Users)`
   WHERE NOT ${Users.deleted()}
 `;
-// → WHERE NOT "users"."deletedAt" IS NOT NULL
 ```
 
 **Compound indexes** via table options:
