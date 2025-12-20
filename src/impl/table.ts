@@ -798,7 +798,7 @@ export interface FieldMeta {
 	indexed?: boolean;
 	softDelete?: boolean;
 	reference?: {
-		table: Table<any>;
+		table: Table;
 		field: string;
 		as: string;
 		onDelete?: "cascade" | "set null" | "restrict";
