@@ -127,6 +127,7 @@ const DB_META_NAMESPACE = "db" as const;
  * Get database metadata from a schema.
  *
  * Metadata is stored under a namespaced key to avoid collisions with user metadata.
+ * Unwraps optional/nullable/default/catch wrappers to find the db metadata.
  *
  * @param schema - Zod schema to read metadata from
  * @returns Database metadata object (empty object if none exists)
@@ -141,7 +142,21 @@ export function getDBMeta(schema: ZodType): Record<string, any> {
 	try {
 		const meta =
 			typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
-		return meta?.[DB_META_NAMESPACE] ?? {};
+		const dbMeta = meta?.[DB_META_NAMESPACE];
+		if (dbMeta && Object.keys(dbMeta).length > 0) {
+			return dbMeta;
+		}
+		// Unwrap optional/nullable/default/catch using public Zod APIs
+		if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+			return getDBMeta(schema.unwrap() as ZodType);
+		}
+		if (schema instanceof z.ZodDefault) {
+			return getDBMeta((schema as any).removeDefault() as ZodType);
+		}
+		if (schema instanceof z.ZodCatch) {
+			return getDBMeta((schema as any).removeCatch() as ZodType);
+		}
+		return {};
 	} catch {
 		// Fallback to empty object if .meta() fails
 		return {};
@@ -360,22 +375,22 @@ function createDBMethods(schema: ZodType) {
 		 *   ondelete: "cascade",
 		 * })
 		 */
-		references(
-			table: Table<any>,
-			as: string,
+		references<RefTable extends Table<any, any>, As extends string>(
+			table: RefTable,
+			as: As,
 			options?: {
 				field?: string;
 				reverseAs?: string;
 				onDelete?: "cascade" | "set null" | "restrict";
 			},
-		) {
+		): ZodType & {readonly __refTable: RefTable; readonly __refAs: As} {
 			return setDBMeta(schema, {
 				reference: {
 					table,
 					as,
 					...options,
 				},
-			});
+			}) as ZodType & {readonly __refTable: RefTable; readonly __refAs: As};
 		},
 
 		/**
@@ -962,6 +977,81 @@ export type SetValues<T extends Table<any>> = {
 	[K in keyof Infer<T>]?: Infer<T>[K];
 };
 
+// ============================================================================
+// Relationship Navigation Types
+// ============================================================================
+
+/**
+ * Unwrap Zod wrapper types (optional, nullable, default, catch) at the type level.
+ * Used to extract reference metadata from wrapped schemas.
+ */
+type UnwrapZod<T> =
+	T extends z.ZodOptional<infer U>
+		? UnwrapZod<U>
+		: T extends z.ZodNullable<infer U>
+			? UnwrapZod<U>
+			: T extends z.ZodDefault<infer U>
+				? UnwrapZod<U>
+				: T extends z.ZodCatch<infer U>
+					? UnwrapZod<U>
+					: T;
+
+/**
+ * Extract relationship references from a table schema.
+ * Maps relationship aliases (the "as" name) to their target tables.
+ *
+ * @example
+ * const Posts = table("posts", {
+ *   authorId: z.string().db.references(Users, "author"),
+ * });
+ * type PostRefs = InferRefs<typeof Posts["schema"]["shape"]>;
+ * // { author: typeof Users }
+ */
+export type InferRefs<T extends ZodRawShape> = {
+	[K in keyof T as UnwrapZod<T[K]> extends {readonly __refAs: infer As}
+		? As extends string
+			? As
+			: never
+		: never]: UnwrapZod<T[K]> extends {
+		readonly __refTable: infer RefTab extends Table<any, any>;
+	}
+		? RefTab
+		: never;
+};
+
+/**
+ * Filter refs to only include those whose backing field is in the picked schema.
+ * Used by pick() to correctly narrow relationship types.
+ */
+type FilterRefs<
+	PickedShape extends ZodRawShape,
+	OriginalRefs extends Record<string, Table<any, any>>,
+> = {
+	[Alias in keyof OriginalRefs as Alias extends keyof InferRefs<PickedShape>
+		? Alias
+		: never]: OriginalRefs[Alias];
+};
+
+/**
+ * A relationship jump point for navigating to a referenced table's fields.
+ */
+export interface Relation<TargetTable extends Table<any, any>> {
+	/** Navigate to the target table's fields */
+	fields(): ReturnType<TargetTable["fields"]>;
+	/** Direct access to the referenced table */
+	readonly table: TargetTable;
+}
+
+/**
+ * The return type of `table.fields()` - combines column fields with relationship navigators.
+ */
+export type TableFields<
+	T extends ZodRawShape,
+	Refs extends Record<string, Table<any, any>>,
+> = {[K in keyof T]: FieldMeta} & {
+	[K in keyof Refs]: Relation<Refs[K]>;
+};
+
 /**
  * A partial view of a table created via pick().
  * Can be used for queries but not for insert().
@@ -969,7 +1059,8 @@ export type SetValues<T extends Table<any>> = {
  */
 export interface PartialTable<
 	T extends ZodRawShape = ZodRawShape,
-> extends Table<T> {}
+	Refs extends Record<string, Table<any, any>> = {},
+> extends Table<T, Refs> {}
 
 /**
  * A table with SQL-derived columns created via derive().
@@ -978,9 +1069,13 @@ export interface PartialTable<
  */
 export interface DerivedTable<
 	T extends ZodRawShape = ZodRawShape,
-> extends Table<T> {}
+	Refs extends Record<string, Table<any, any>> = {},
+> extends Table<T, Refs> {}
 
-export interface Table<T extends ZodRawShape = ZodRawShape> {
+export interface Table<
+	T extends ZodRawShape = ZodRawShape,
+	Refs extends Record<string, Table<any, any>> = {},
+> {
 	readonly [TABLE_MARKER]: true;
 	/** @internal Symbol-keyed internal metadata */
 	readonly [TABLE_META]: TableMeta;
@@ -995,8 +1090,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 */
 	readonly meta: TableMeta;
 
-	/** Get field metadata for forms/admin */
-	fields(): Record<string, FieldMeta>;
+	/** Get field metadata for forms/admin, with relationship navigators */
+	fields(): TableFields<T, Refs>;
 
 	/**
 	 * Get the primary key field name.
@@ -1069,7 +1164,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 */
 	pick<K extends keyof z.infer<ZodObject<T>>>(
 		...fields: K[]
-	): PartialTable<Pick<T, K & keyof T>>;
+	): PartialTable<Pick<T, K & keyof T>, FilterRefs<Pick<T, K & keyof T>, Refs>>;
 
 	/**
 	 * Create a new table with SQL-computed derived columns.
@@ -1100,7 +1195,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	): (
 		strings: TemplateStringsArray,
 		...values: unknown[]
-	) => DerivedTable<T & {[K in N]: V}>;
+	) => DerivedTable<T & {[K in N]: V}, Refs>;
 
 	/**
 	 * Access qualified column names as SQL fragments.
@@ -1201,7 +1296,7 @@ export function table<T extends Record<string, ZodType>>(
 	name: string,
 	shape: T,
 	options: TableOptions = {},
-): Table<any> {
+): Table<T, InferRefs<T>> {
 	// Validate table name for dangerous characters
 	validateIdentifier(name, "table");
 
@@ -1289,6 +1384,25 @@ export function table<T extends Record<string, ZodType>>(
 			if (ref.as in shape) {
 				throw new TableDefinitionError(
 					`Table "${name}": reference property "${ref.as}" (from field "${key}") collides with existing schema field. Choose a different 'as' name.`,
+					name,
+					key,
+				);
+			}
+
+			// Validate 'as' doesn't collide with derived properties
+			if (options.derive && ref.as in options.derive) {
+				throw new TableDefinitionError(
+					`Table "${name}": reference property "${ref.as}" (from field "${key}") collides with derived property. Choose a different 'as' name.`,
+					name,
+					key,
+				);
+			}
+
+			// Validate 'as' doesn't collide with other reference aliases
+			const existingRef = meta.references.find((r) => r.as === ref.as);
+			if (existingRef) {
+				throw new TableDefinitionError(
+					`Table "${name}": duplicate reference alias "${ref.as}" used by fields "${existingRef.fieldName}" and "${key}". Each reference must have a unique 'as' name.`,
 					name,
 					key,
 				);
@@ -1421,7 +1535,7 @@ function createTableObject(
 	// Combine options.derive with meta for internal storage
 	const internalMeta = {...meta, derive: options.derive};
 
-	const table: Table<any> = {
+	const table: Table<any, any> = {
 		[TABLE_MARKER]: true,
 		[TABLE_META]: internalMeta,
 		name,
@@ -1436,15 +1550,23 @@ function createTableObject(
 			return internalMeta;
 		},
 
-		fields(): Record<string, FieldMeta> {
-			const result: Record<string, FieldMeta> = {};
+		fields(): TableFields<any, any> {
+			const result: Record<string, FieldMeta | Relation<any>> = {};
 
 			for (const [key, zodType] of Object.entries(zodShape)) {
 				const dbMeta = meta.fields[key] || {};
 				result[key] = extractFieldMeta(key, zodType, dbMeta);
 			}
 
-			return result;
+			// Add relationship navigators for each reference
+			for (const ref of meta.references) {
+				result[ref.as] = {
+					fields: () => ref.table.fields(),
+					table: ref.table,
+				};
+			}
+
+			return result as TableFields<any, any>;
 		},
 
 		primaryKey(): string | null {
@@ -2087,15 +2209,15 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 *   ondelete: "cascade",
 	 * })
 	 */
-	references(
-		table: Table<any>,
-		as: string,
+	references<RefTable extends Table<any, any>, As extends string>(
+		table: RefTable,
+		as: As,
 		options?: {
 			field?: string;
 			reverseAs?: string;
 			onDelete?: "cascade" | "set null" | "restrict";
 		},
-	): Schema;
+	): Schema & {readonly __refTable: RefTable; readonly __refAs: As};
 
 	/**
 	 * Encode app values to DB values (for INSERT/UPDATE).

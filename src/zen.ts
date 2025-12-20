@@ -28,6 +28,8 @@ export {
 	type Infer,
 	type FieldMeta,
 	type FieldType,
+	type Relation,
+	type InferRefs,
 } from "./impl/table.js";
 
 // ============================================================================
