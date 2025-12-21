@@ -219,9 +219,100 @@ export default class MySQLDriver implements Driver {
 		await this.#pool.end();
 	}
 
+	// ==========================================================================
+	// Type Encoding/Decoding
+	// ==========================================================================
+
+	/**
+	 * Encode a JS value for database insertion.
+	 * MySQL: needs conversion for Date and boolean.
+	 */
+	encodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date && !isNaN(value.getTime())) {
+					// MySQL format: "YYYY-MM-DD HH:MM:SS.mmm" (no T, no Z)
+					return value.toISOString().replace("T", " ").slice(0, 23);
+				}
+				return value;
+
+			case "boolean":
+				// MySQL: use 0/1
+				return value ? 1 : 0;
+
+			case "json":
+				// Stringify for JSON storage
+				return JSON.stringify(value);
+
+			default:
+				return value;
+		}
+	}
+
+	/**
+	 * Decode a database value to JS.
+	 * MySQL: handles 0/1 booleans and datetime strings.
+	 */
+	decodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date) {
+					if (isNaN(value.getTime())) {
+						throw new Error(`Invalid Date object received from database`);
+					}
+					return value;
+				}
+				if (typeof value === "string") {
+					// MySQL: Format is typically "YYYY-MM-DD HH:MM:SS"
+					// Normalize to ISO for consistent parsing
+					const normalized = value.includes("T")
+						? value
+						: value.replace(" ", "T") + "Z";
+					const date = new Date(normalized);
+					if (isNaN(date.getTime())) {
+						throw new Error(
+							`Invalid date value: "${value}" cannot be parsed as a valid date`,
+						);
+					}
+					return date;
+				}
+				return value;
+
+			case "boolean":
+				// MySQL: 0/1 or "0"/"1"
+				if (typeof value === "number") {
+					return value !== 0;
+				}
+				if (typeof value === "string") {
+					return value !== "0" && value !== "";
+				}
+				return value;
+
+			case "json":
+				if (typeof value === "string") {
+					return JSON.parse(value);
+				}
+				return value;
+
+			default:
+				return value;
+		}
+	}
+
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		const connection = await this.#pool.getConnection();
 		const handleError = this.#handleError.bind(this);
+		// Capture encode/decode methods for transaction driver
+		const encodeValue = this.encodeValue.bind(this);
+		const decodeValue = this.decodeValue.bind(this);
 
 		try {
 			// Use query() not execute() - transaction commands aren't supported in prepared statement protocol
@@ -229,6 +320,8 @@ export default class MySQLDriver implements Driver {
 
 			const txDriver: Driver = {
 				supportsReturning: false,
+				encodeValue,
+				decodeValue,
 				all: async <R>(
 					strings: TemplateStringsArray,
 					values: unknown[],

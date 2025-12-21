@@ -344,16 +344,133 @@ export default class BunDriver implements Driver {
 		await this.#sql.close();
 	}
 
+	// ==========================================================================
+	// Type Encoding/Decoding
+	// ==========================================================================
+
+	/**
+	 * Encode a JS value for database insertion.
+	 * Dialect-aware: PostgreSQL uses native types, SQLite/MySQL need conversion.
+	 */
+	encodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date && !isNaN(value.getTime())) {
+					if (this.#dialect === "postgresql") {
+						// PostgreSQL: pg library handles Date natively
+						return value;
+					} else if (this.#dialect === "mysql") {
+						// MySQL format: "YYYY-MM-DD HH:MM:SS.mmm" (no T, no Z)
+						return value.toISOString().replace("T", " ").slice(0, 23);
+					} else {
+						// SQLite: ISO 8601 works
+						return value.toISOString();
+					}
+				}
+				return value;
+
+			case "boolean":
+				if (this.#dialect === "postgresql") {
+					// PostgreSQL: native boolean
+					return value;
+				}
+				// SQLite/MySQL: use 0/1
+				return value ? 1 : 0;
+
+			case "json":
+				// All dialects: stringify for storage
+				// (PostgreSQL JSONB accepts objects but we stringify for consistency)
+				return JSON.stringify(value);
+
+			default:
+				return value;
+		}
+	}
+
+	/**
+	 * Decode a database value to JS.
+	 * Dialect-aware: handles differences in how values are returned.
+	 */
+	decodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date) {
+					if (isNaN(value.getTime())) {
+						throw new Error(`Invalid Date object received from database`);
+					}
+					return value;
+				}
+				if (typeof value === "string") {
+					let date: Date;
+					if (this.#dialect === "mysql") {
+						// MySQL: Format is typically "YYYY-MM-DD HH:MM:SS"
+						// We normalize to ISO for consistent parsing
+						const normalized = value.includes("T")
+							? value
+							: value.replace(" ", "T") + "Z";
+						date = new Date(normalized);
+					} else {
+						// SQLite/PostgreSQL: parse ISO 8601
+						date = new Date(value);
+					}
+					if (isNaN(date.getTime())) {
+						throw new Error(
+							`Invalid date value: "${value}" cannot be parsed as a valid date`,
+						);
+					}
+					return date;
+				}
+				return value;
+
+			case "boolean":
+				if (this.#dialect === "postgresql") {
+					// PostgreSQL returns native booleans
+					return value;
+				}
+				// SQLite/MySQL: 0/1 or "0"/"1"
+				if (typeof value === "number") {
+					return value !== 0;
+				}
+				if (typeof value === "string") {
+					return value !== "0" && value !== "";
+				}
+				return value;
+
+			case "json":
+				if (typeof value === "string") {
+					return JSON.parse(value);
+				}
+				// PostgreSQL JSONB returns objects directly
+				return value;
+
+			default:
+				return value;
+		}
+	}
+
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		const dialect = this.#dialect;
 		const handleError = this.#handleError.bind(this);
 		const supportsReturning = this.supportsReturning;
+		// Capture encode/decode methods for transaction driver
+		const encodeValue = this.encodeValue.bind(this);
+		const decodeValue = this.decodeValue.bind(this);
 
 		// Bun.SQL's transaction() reserves a connection and provides a scoped SQL instance
 		return await (this.#sql as any).transaction(async (txSql: any) => {
 			// Create a transaction-bound driver that uses the transaction SQL
 			const txDriver: Driver = {
 				supportsReturning,
+				encodeValue,
+				decodeValue,
 				all: async <R>(
 					strings: TemplateStringsArray,
 					values: unknown[],

@@ -2778,20 +2778,69 @@ declare module "zod" {
 }
 
 // ============================================================================
+// Field Type Inference
+// ============================================================================
+
+/**
+ * Infer the database field type from a Zod schema.
+ * Used by encodeData() and decodeData() to determine type-specific handling.
+ *
+ * @param schema - The Zod schema for the field
+ * @returns The field type: "text", "integer", "real", "boolean", "datetime", "json"
+ */
+export function inferFieldType(schema: z.ZodTypeAny): string {
+	let core = schema;
+
+	// Unwrap optional, nullable, default, etc. wrappers
+	while (typeof (core as any).unwrap === "function") {
+		// Stop unwrapping if we hit a type that determines the field type
+		if (
+			core instanceof z.ZodArray ||
+			core instanceof z.ZodObject ||
+			core instanceof z.ZodDate ||
+			core instanceof z.ZodBoolean ||
+			core instanceof z.ZodNumber
+		) {
+			break;
+		}
+		core = (core as any).unwrap();
+	}
+
+	if (core instanceof z.ZodDate) return "datetime";
+	if (core instanceof z.ZodBoolean) return "boolean";
+	if (core instanceof z.ZodObject || core instanceof z.ZodArray) return "json";
+	if (core instanceof z.ZodNumber) return "real";
+	return "text";
+}
+
+// ============================================================================
 // Data Decoding
 // ============================================================================
 
 /**
+ * Minimal interface for driver decoding capability.
+ * Defined here to avoid circular imports from database.ts.
+ */
+export interface DriverDecoder {
+	decodeValue?(value: unknown, fieldType: string): unknown;
+}
+
+/**
  * Decode database result data into proper JS types using table schema.
  *
- * Handles:
- * - Custom .db.decode() transformations
- * - Automatic JSON parsing for object/array fields
- * - Automatic Date parsing for date fields
+ * Priority order:
+ * 1. Custom field-level .db.decode() (always wins)
+ * 2. Driver.decodeValue() (dialect-specific)
+ * 3. Auto-decode fallback (JSON.parse, 0/1→boolean, string→Date)
+ *
+ * @param table - The table/view definition
+ * @param data - The raw database row
+ * @param driver - Optional driver for dialect-specific decoding
  */
 export function decodeData<T extends Queryable<any>>(
 	table: T,
 	data: Record<string, unknown> | null,
+	driver?: DriverDecoder,
 ): Record<string, unknown> | null {
 	if (!data) return data;
 
@@ -2803,9 +2852,14 @@ export function decodeData<T extends Queryable<any>>(
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {
-			// Custom decoding specified - use it
+			// 1. Custom field-level decoding - always wins
 			decoded[key] = fieldMeta.decode(value);
+		} else if (driver?.decodeValue && fieldSchema) {
+			// 2. Driver-level decoding - dialect-specific
+			const fieldType = inferFieldType(fieldSchema);
+			decoded[key] = driver.decodeValue(value, fieldType);
 		} else if (fieldSchema) {
+			// 3. Auto-decode fallback
 			// Check if field needs auto-decode (JSON, boolean, date)
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {

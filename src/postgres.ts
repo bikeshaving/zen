@@ -104,6 +104,7 @@ export default class PostgresDriver implements Driver {
 			max: options.max ?? 10,
 			idle_timeout: options.idleTimeout ?? 30,
 			connect_timeout: options.connectTimeout ?? 30,
+			onnotice: () => {}, // Suppress PostgreSQL NOTICE messages
 		});
 	}
 
@@ -197,12 +198,83 @@ export default class PostgresDriver implements Driver {
 		await this.#sql.end();
 	}
 
+	// ==========================================================================
+	// Type Encoding/Decoding
+	// ==========================================================================
+
+	/**
+	 * Encode a JS value for database insertion.
+	 * PostgreSQL: postgres.js library handles Date and boolean natively.
+	 */
+	encodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				// postgres.js handles Date natively
+				return value;
+
+			case "boolean":
+				// postgres.js handles boolean natively
+				return value;
+
+			case "json":
+				// Stringify for JSONB storage
+				return JSON.stringify(value);
+
+			default:
+				return value;
+		}
+	}
+
+	/**
+	 * Decode a database value to JS.
+	 * PostgreSQL: postgres.js returns proper types for most things.
+	 */
+	decodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				// postgres.js returns Date objects
+				if (value instanceof Date) {
+					if (isNaN(value.getTime())) {
+						throw new Error(`Invalid Date object received from database`);
+					}
+				}
+				return value;
+
+			case "boolean":
+				// postgres.js returns native booleans
+				return value;
+
+			case "json":
+				// postgres.js returns parsed JSONB as objects
+				if (typeof value === "string") {
+					return JSON.parse(value);
+				}
+				return value;
+
+			default:
+				return value;
+		}
+	}
+
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		const handleError = this.#handleError.bind(this);
+		// Capture encode/decode methods for transaction driver
+		const encodeValue = this.encodeValue.bind(this);
+		const decodeValue = this.decodeValue.bind(this);
 
 		const result = await this.#sql.begin(async (txSql) => {
 			const txDriver: Driver = {
 				supportsReturning: true,
+				encodeValue,
+				decodeValue,
 				all: async <R>(
 					strings: TemplateStringsArray,
 					values: unknown[],

@@ -195,8 +195,89 @@ export default class SQLiteDriver implements Driver {
 		this.#db.close();
 	}
 
+	// ==========================================================================
+	// Type Encoding/Decoding
+	// ==========================================================================
+
+	/**
+	 * Encode a JS value for database insertion.
+	 * SQLite: needs conversion for Date and boolean.
+	 */
+	encodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date && !isNaN(value.getTime())) {
+					// SQLite: ISO 8601 works
+					return value.toISOString();
+				}
+				return value;
+
+			case "boolean":
+				// SQLite: use 0/1
+				return value ? 1 : 0;
+
+			case "json":
+				// Stringify for TEXT storage
+				return JSON.stringify(value);
+
+			default:
+				return value;
+		}
+	}
+
+	/**
+	 * Decode a database value to JS.
+	 * SQLite: handles 0/1 booleans and datetime strings.
+	 */
+	decodeValue(value: unknown, fieldType: string): unknown {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		switch (fieldType) {
+			case "datetime":
+				if (value instanceof Date) {
+					if (isNaN(value.getTime())) {
+						throw new Error(`Invalid Date object received from database`);
+					}
+					return value;
+				}
+				if (typeof value === "string") {
+					const date = new Date(value);
+					if (isNaN(date.getTime())) {
+						throw new Error(
+							`Invalid date value: "${value}" cannot be parsed as a valid date`,
+						);
+					}
+					return date;
+				}
+				return value;
+
+			case "boolean":
+				// SQLite: 0/1
+				if (typeof value === "number") {
+					return value !== 0;
+				}
+				return value;
+
+			case "json":
+				if (typeof value === "string") {
+					return JSON.parse(value);
+				}
+				return value;
+
+			default:
+				return value;
+		}
+	}
+
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		// better-sqlite3 uses a single connection, so we pass `this` as the transaction driver.
+		// Since `this` already has encodeValue/decodeValue, no additional setup needed.
 		// All operations will use the same connection within the transaction.
 		this.#db.exec("BEGIN");
 		try {

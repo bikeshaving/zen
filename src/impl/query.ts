@@ -9,6 +9,7 @@ import {
 	isTable,
 	validateWithStandardSchema,
 	decodeData,
+	type DriverDecoder,
 } from "./table.js";
 import {
 	ident,
@@ -466,6 +467,7 @@ export function entityKey(tableName: string, primaryKey: string): string {
 export function buildEntityMap(
 	rows: RawRow[],
 	tables: Table<any>[],
+	driver?: DriverDecoder,
 ): EntityMap {
 	const entities: EntityMap = new Map();
 
@@ -481,7 +483,7 @@ export function buildEntityMap(
 
 			if (!entities.has(key)) {
 				// Decode JSON strings back to objects/arrays, then validate
-				const decoded = decodeData(table, data);
+				const decoded = decodeData(table, data, driver);
 				const parsed = validateWithStandardSchema<Record<string, unknown>>(
 					table.schema,
 					decoded,
@@ -726,7 +728,11 @@ function validateRegisteredTables(rows: RawRow[], tables: Table<any>[]): void {
  * const posts = normalize(rows, [posts, users]);
  * // posts[0].author === posts[1].author  // Same instance!
  */
-export function normalize<T>(rows: RawRow[], tables: Table<any>[]): T[] {
+export function normalize<T>(
+	rows: RawRow[],
+	tables: Table<any>[],
+	driver?: DriverDecoder,
+): T[] {
 	if (tables.length === 0) {
 		throw new Error("At least one table is required");
 	}
@@ -738,7 +744,7 @@ export function normalize<T>(rows: RawRow[], tables: Table<any>[]): T[] {
 	// Validate all joined tables are registered
 	validateRegisteredTables(rows, tables);
 
-	const entities = buildEntityMap(rows, tables);
+	const entities = buildEntityMap(rows, tables, driver);
 	resolveReferences(entities, tables);
 	applyDerivedProperties(entities, tables);
 
@@ -754,9 +760,10 @@ export function normalize<T>(rows: RawRow[], tables: Table<any>[]): T[] {
 export function normalizeOne<T>(
 	row: RawRow | null,
 	tables: Table<any>[],
+	driver?: DriverDecoder,
 ): T | null {
 	if (!row) return null;
 
-	const results = normalize<T>([row], tables);
+	const results = normalize<T>([row], tables, driver);
 	return results[0] ?? null;
 }

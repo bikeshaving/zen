@@ -40,6 +40,12 @@ export function expect<T>(actual: T) {
 		toBeLessThan(expected: number) {
 			assert.ok((actual as any) < expected);
 		},
+		toBeInstanceOf(expected: any) {
+			assert.ok(actual instanceof expected);
+		},
+		toHaveLength(expected: number) {
+			assert.strictEqual((actual as any).length, expected);
+		},
 		toContain(expected: any) {
 			if (Array.isArray(actual)) {
 				assert.ok(actual.includes(expected));
