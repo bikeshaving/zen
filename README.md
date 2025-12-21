@@ -822,17 +822,11 @@ console.log(Posts.ddl().toString());
 
 | Feature | SQLite | PostgreSQL | MySQL |
 |---------|--------|------------|-------|
-| **DDL Generation** | ✅ | ✅ | ✅ |
-| **RETURNING** | ✅ | ✅ | ❌ (uses SELECT after) |
-| **IF NOT EXISTS** (CREATE TABLE) | ✅ | ✅ | ✅ |
-| **IF NOT EXISTS** (ADD COLUMN) | ✅ | ✅ | ❌ (may error if exists) |
-| **Migration Locks** | BEGIN EXCLUSIVE | pg_advisory_lock | GET_LOCK |
-| **EXPLAIN** | EXPLAIN QUERY PLAN | EXPLAIN | EXPLAIN |
-| **JSON Type** | TEXT | JSONB | TEXT |
-| **Boolean Type** | INTEGER (0/1) | BOOLEAN | BOOLEAN |
-| **Date Type** | TEXT (ISO) | TIMESTAMPTZ | DATETIME |
-| **Transactions** | ✅ | ✅ | ✅ |
-| **Advisory Locks** | ❌ | ✅ | ✅ (named) |
+| RETURNING | ✅ | ✅ | ⚠️ fallback |
+| IF NOT EXISTS (CREATE TABLE) | ✅ | ✅ | ✅ |
+| IF NOT EXISTS (ADD COLUMN) | ✅ | ✅ | ⚠️ may error |
+| Migration Locks | BEGIN EXCLUSIVE | pg_advisory_lock | GET_LOCK |
+| Advisory Locks | — | ✅ | ✅ |
 
 ### Zod to SQL Type Mapping
 

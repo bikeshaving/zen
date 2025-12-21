@@ -1,6 +1,6 @@
 {
   "name": "@b9g/zen",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The simple database client. Define tables. Write SQL. Get objects.",
   "type": "module",
   "exports": {
