@@ -834,5 +834,251 @@ for (const dialect of dialects) {
 				expect(result[1].price).toBe(50);
 			});
 		});
+
+		describe("Soft Delete Views", () => {
+			it("creates view for tables with soft delete field", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				// Use string for deletedAt since SQLite stores dates as strings
+				const Users = table(`users_sd_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				await db.ensureTable(Users);
+
+				// Insert users - one active, one deleted
+				await db.insert(Users, {id: "1", name: "Alice", deletedAt: null});
+				await db.insert(Users, {
+					id: "2",
+					name: "Bob",
+					deletedAt: new Date().toISOString(),
+				});
+
+				// Query the base table - should see both
+				const allUsers = await db.all(Users)``;
+				expect(allUsers).toHaveLength(2);
+
+				// Query the active view - should only see Alice
+				const activeUsers = await db.all(Users.active)``;
+				expect(activeUsers).toHaveLength(1);
+				expect(activeUsers[0].name).toBe("Alice");
+			});
+
+			it("active view works with JOINs", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				// Use string for deletedAt since SQLite stores dates as strings
+				const Authors = table(`authors_sd_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				const Posts = table(`posts_sd_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					authorId: stringId().db.references(Authors, "author"),
+				});
+
+				await db.ensureTable(Authors);
+				await db.ensureTable(Posts);
+
+				// Insert authors - one active, one deleted
+				await db.insert(Authors, {id: "a1", name: "Alice", deletedAt: null});
+				await db.insert(Authors, {
+					id: "a2",
+					name: "Bob",
+					deletedAt: new Date().toISOString(),
+				});
+
+				// Insert posts by both authors
+				await db.insert(Posts, {id: "p1", title: "Post 1", authorId: "a1"});
+				await db.insert(Posts, {id: "p2", title: "Post 2", authorId: "a2"});
+
+				// Query posts with active authors only
+				const viewName = `${Authors.name}__active`;
+				const result = await db.query<{title: string; authorName: string}>`
+					SELECT ${ident("title")}, ${ident(viewName)}.${ident("name")} as ${ident("authorName")}
+					FROM ${ident(Posts.name)}
+					JOIN ${ident(viewName)} ON ${ident(viewName)}.${ident("id")} = ${ident(Posts.name)}.${ident("authorId")}
+				`;
+
+				expect(result).toHaveLength(1);
+				expect(result[0].title).toBe("Post 1");
+				expect(result[0].authorName).toBe("Alice");
+			});
+
+			it("active property throws if no soft delete field", () => {
+				const NormalTable = table("normal", {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				expect(() => NormalTable.active).toThrow(
+					'Table "normal" does not have a soft delete field',
+				);
+			});
+
+			it("active view blocks insert operations", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_ro_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				await db.ensureTable(Users);
+
+				// Trying to insert into the active view should throw
+				await expect(
+					db.insert(Users.active, {id: "1", name: "Alice", deletedAt: null}),
+				).rejects.toThrow(/Cannot insert on view.*Views are read-only/);
+			});
+
+			it("active view blocks softDelete operations", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_ro2_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", name: "Alice", deletedAt: null});
+
+				// Trying to softDelete from the active view should throw
+				expect(() => db.softDelete(Users.active, "1")).toThrow(
+					/Cannot softDelete on view.*Views are read-only/,
+				);
+			});
+		});
+
+		describe("Generalized Views", () => {
+			it("view() creates custom views with WHERE clause", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_view_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					role: stringField(),
+				});
+
+				// Define a custom view for admins
+				const AdminUsers = Users.view("admins")`
+					WHERE ${Users.cols.role} = ${"admin"}
+				`;
+
+				await db.ensureTable(Users);
+
+				// Insert users with different roles
+				await db.insert(Users, {id: "1", name: "Alice", role: "admin"});
+				await db.insert(Users, {id: "2", name: "Bob", role: "user"});
+				await db.insert(Users, {id: "3", name: "Carol", role: "admin"});
+
+				// Query the base table - should see all
+				const allUsers = await db.all(Users)``;
+				expect(allUsers).toHaveLength(3);
+
+				// Query the admin view - should only see admins
+				const admins = await db.all(AdminUsers)``;
+				expect(admins).toHaveLength(2);
+				expect(admins.map((u) => u.name).sort()).toEqual(["Alice", "Carol"]);
+			});
+
+			it("view() creates views that work with template values", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Products = table(`products_view_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					price: z.number(),
+				});
+
+				// View for expensive products (price > 100)
+				const ExpensiveProducts = Products.view("expensive")`
+					WHERE ${Products.cols.price} > ${100}
+				`;
+
+				await db.ensureTable(Products);
+
+				await db.insert(Products, {id: "1", name: "Cheap", price: 50});
+				await db.insert(Products, {id: "2", name: "Medium", price: 100});
+				await db.insert(Products, {id: "3", name: "Expensive", price: 200});
+
+				const expensive = await db.all(ExpensiveProducts)``;
+				expect(expensive).toHaveLength(1);
+				expect(expensive[0].name).toBe("Expensive");
+			});
+
+			it("custom views are read-only", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_view_ro_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					active: z.boolean(),
+				});
+
+				const ActiveUsers = Users.view("active_custom")`
+					WHERE ${Users.cols.active} = ${true}
+				`;
+
+				await db.ensureTable(Users);
+
+				// Trying to insert into custom view should throw
+				await expect(
+					db.insert(ActiveUsers, {id: "1", name: "Test", active: true}),
+				).rejects.toThrow(/Cannot insert on view.*Views are read-only/);
+			});
+
+			it("views block update operations", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_view_upd_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", name: "Alice", deletedAt: null});
+
+				// Trying to update via active view should throw
+				expect(() => db.update(Users.active, {name: "Bob"}, "1")).toThrow(
+					/Cannot update on view.*Views are read-only/,
+				);
+			});
+
+			it("views block delete operations", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Users = table(`users_view_del_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					deletedAt: z.string().nullable().db.softDelete(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", name: "Alice", deletedAt: null});
+
+				// Trying to delete via active view should throw
+				expect(() => db.delete(Users.active, "1")).toThrow(
+					/Cannot delete on view.*Views are read-only/,
+				);
+			});
+		});
 	});
 }

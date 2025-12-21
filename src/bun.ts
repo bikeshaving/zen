@@ -15,6 +15,7 @@ import {
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import {getTableMeta} from "./impl/table.js";
 import {generateDDL} from "./impl/ddl.js";
 import {
 	renderDDL,
@@ -71,6 +72,60 @@ function buildSQL(
 	}
 
 	return {sql, params};
+}
+
+/**
+ * Build SQL with all values inlined (for DDL like CREATE VIEW).
+ * Values are escaped/quoted appropriately for the dialect.
+ */
+function buildSQLInlined(
+	strings: TemplateStringsArray,
+	values: unknown[],
+	dialect: SQLDialect,
+): string {
+	let sql = strings[0];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLBuiltin(value)) {
+			sql += resolveSQLBuiltin(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			sql += quoteIdent(value.name, dialect) + strings[i + 1];
+		} else {
+			// Inline the literal value
+			sql += inlineLiteral(value, dialect) + strings[i + 1];
+		}
+	}
+
+	return sql;
+}
+
+/**
+ * Convert a value to an inline SQL literal.
+ */
+function inlineLiteral(value: unknown, dialect: SQLDialect): string {
+	if (value === null || value === undefined) {
+		return "NULL";
+	}
+	if (typeof value === "boolean") {
+		// SQLite uses 0/1 for booleans
+		if (dialect === "sqlite") {
+			return value ? "1" : "0";
+		}
+		return value ? "TRUE" : "FALSE";
+	}
+	if (typeof value === "number") {
+		return String(value);
+	}
+	if (typeof value === "string") {
+		// Escape single quotes by doubling them
+		return `'${value.replace(/'/g, "''")}'`;
+	}
+	if (value instanceof Date) {
+		return `'${value.toISOString()}'`;
+	}
+	// Fallback: stringify and escape
+	return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 /**
@@ -515,6 +570,11 @@ export default class BunDriver implements Driver {
 				await this.#checkMissingConstraints(table);
 			}
 
+			// Step 5: Ensure all defined views exist
+			step = 5;
+			const viewApplied = await this.#ensureViews(table);
+			applied = applied || viewApplied;
+
 			return {applied};
 		} catch (error) {
 			if (error instanceof SchemaDriftError || error instanceof EnsureError) {
@@ -905,6 +965,47 @@ export default class BunDriver implements Driver {
 		}
 
 		return applied;
+	}
+
+	/**
+	 * Ensure all defined views exist for this table.
+	 * Creates views from the table's view definitions.
+	 */
+	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
+		const meta = getTableMeta(table);
+		const views = meta.views;
+
+		// Skip if no views defined
+		if (!views || views.length === 0) {
+			return false;
+		}
+
+		const tableName = table.name;
+		const quotedTable = quoteIdent(tableName, this.#dialect);
+
+		for (const viewDef of views) {
+			const viewName = `${tableName}__${viewDef.name}`;
+			const quotedView = quoteIdent(viewName, this.#dialect);
+
+			// Render the WHERE clause from the template
+			// Use buildSQLInlined since CREATE VIEW doesn't support placeholders
+			const whereTemplate = viewDef.whereTemplate;
+			const whereSQL = buildSQLInlined(
+				whereTemplate[0],
+				whereTemplate.slice(1) as unknown[],
+				this.#dialect,
+			);
+
+			// SQLite doesn't support CREATE OR REPLACE VIEW
+			// Use DROP VIEW IF EXISTS + CREATE VIEW
+			await this.#sql.unsafe(`DROP VIEW IF EXISTS ${quotedView}`, []);
+			await this.#sql.unsafe(
+				`CREATE VIEW ${quotedView} AS SELECT * FROM ${quotedTable} ${whereSQL}`,
+				[],
+			);
+		}
+
+		return true;
 	}
 
 	async #createIndex(

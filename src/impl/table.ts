@@ -931,6 +931,14 @@ export function isTable(value: unknown): value is Table<any> {
 	);
 }
 
+/** A view definition attached to a table */
+export interface ViewDef {
+	/** View suffix name (e.g., "active" becomes "users__active") */
+	name: string;
+	/** SQL template for the WHERE clause */
+	whereTemplate: SQLTemplate;
+}
+
 /** Internal table metadata type */
 export interface TableMeta {
 	primary: string | null;
@@ -944,6 +952,12 @@ export interface TableMeta {
 	isDerived?: boolean;
 	derivedExprs?: DerivedExpr[];
 	derivedFields?: string[];
+	/** True if this table represents a view (read-only, no mutations) */
+	isView?: boolean;
+	/** The base table name this view is derived from */
+	viewOf?: string;
+	/** User-defined views on this table */
+	views?: ViewDef[];
 }
 
 /**
@@ -1286,6 +1300,65 @@ export interface Table<
 	 * // → INSERT INTO posts (id, title) VALUES (?, ?), (?, ?)
 	 */
 	values(rows: Partial<z.infer<ZodObject<T>>>[]): SQLTemplate;
+
+	/**
+	 * Define a view on this table with a WHERE clause.
+	 *
+	 * Views are read-only projections of the table. The view is created
+	 * automatically when `ensureTable()` is called on the base table.
+	 *
+	 * @param viewName - Suffix for the view name (e.g., "active" → "users__active")
+	 * @returns Tagged template function that accepts the WHERE clause
+	 *
+	 * @example
+	 * // Define views
+	 * const ActiveUsers = Users.view("active")`
+	 *   WHERE ${Users.cols.deletedAt} IS NULL
+	 * `;
+	 * const AdminUsers = Users.view("admins")`
+	 *   WHERE ${Users.cols.role} = ${"admin"}
+	 * `;
+	 *
+	 * // Views are created with ensureTable
+	 * await db.ensureTable(Users);  // Creates table + all views
+	 *
+	 * // Query from view
+	 * const admins = await db.all(AdminUsers)``;
+	 *
+	 * // Views are read-only
+	 * await db.insert(AdminUsers, {...});  // ✗ Throws error
+	 */
+	view(
+		viewName: string,
+	): (strings: TemplateStringsArray, ...values: unknown[]) => Table<T, Refs>;
+
+	/**
+	 * Get a view-based table that excludes soft-deleted rows.
+	 *
+	 * Returns a read-only table pointing to a view (e.g., `users__active`)
+	 * that filters out deleted rows. Use `ensureTable()` to create the view.
+	 *
+	 * The returned table is read-only - use the original table for mutations.
+	 *
+	 * @throws Error if table doesn't have a soft delete field
+	 *
+	 * @example
+	 * // Define table with soft delete
+	 * const Users = table("users", {
+	 *   id: z.string().db.primary(),
+	 *   name: z.string(),
+	 *   deletedAt: z.date().nullable().db.softDelete(),
+	 * });
+	 *
+	 * // Query only active (non-deleted) users
+	 * const activeUsers = await db.all(Users.active)``;
+	 *
+	 * // JOINs automatically filter deleted rows
+	 * await db.all([Posts, Users.active])`
+	 *   JOIN "users__active" ON ${Users.active.cols.id} = ${Posts.cols.authorId}
+	 * `;
+	 */
+	readonly active: Table<T, Refs>;
 }
 
 /**
@@ -1464,7 +1537,23 @@ export function table<T extends Record<string, ZodType>>(
 
 	const schema = z.object(zodShape as any);
 
-	return createTableObject(name, schema, zodShape, meta, options);
+	// Auto-register "active" view for tables with soft delete
+	const metaWithViews: typeof meta & {views?: ViewDef[]} = meta;
+	if (meta.softDeleteField) {
+		// Build: WHERE "table"."deletedAt" IS NULL
+		const whereTemplate = createTemplate(
+			makeTemplate(["WHERE ", ".", " IS NULL"]),
+			[ident(name), ident(meta.softDeleteField)],
+		);
+		metaWithViews.views = [
+			{
+				name: "active",
+				whereTemplate,
+			},
+		];
+	}
+
+	return createTableObject(name, schema, zodShape, metaWithViews, options);
 }
 
 /**
@@ -1514,6 +1603,7 @@ function createTableObject(
 		softDeleteField: string | null;
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDBMeta>;
+		views?: ViewDef[];
 	},
 	options: TableOptions,
 ): Table<any> {
@@ -1910,6 +2000,109 @@ function createTableObject(
 			}
 
 			return createTemplate(makeTemplate(strings), templateValues);
+		},
+
+		view(viewName: string) {
+			return (
+				stringsOrValue: TemplateStringsArray,
+				...templateValues: unknown[]
+			): Table<any, any> => {
+				validateIdentifier(viewName, "table");
+				if (viewName.includes(".")) {
+					throw new TableDefinitionError(
+						`Invalid view name "${viewName}": view names cannot contain "." as it conflicts with normalization prefixes`,
+						name,
+					);
+				}
+				// Build template by flattening any SQL fragments (same as derive())
+				const strings: string[] = [];
+				const values: unknown[] = [];
+
+				for (let i = 0; i < stringsOrValue.length; i++) {
+					if (i === 0) {
+						strings.push(stringsOrValue[i]);
+					}
+
+					if (i < templateValues.length) {
+						const value = templateValues[i];
+						if (isSQLTemplate(value)) {
+							mergeFragment(strings, values, value, stringsOrValue[i + 1]);
+						} else {
+							values.push(value);
+							strings.push(stringsOrValue[i + 1]);
+						}
+					}
+				}
+
+				// Trim whitespace
+				if (strings.length > 0) {
+					strings[0] = strings[0].trimStart();
+					strings[strings.length - 1] = strings[strings.length - 1].trimEnd();
+				}
+
+				const whereTemplate = createTemplate(makeTemplate(strings), values);
+
+				// Create view definition
+				const viewDef: ViewDef = {
+					name: viewName,
+					whereTemplate,
+				};
+
+				// Create full view name: table__viewName
+				const fullViewName = `${name}__${viewName}`;
+
+				// Create a view-based table with same schema but different name
+				// Also register the view definition on the base table's meta
+				const existingViews = meta.views ?? [];
+				const updatedMeta = {
+					...meta,
+					views: [...existingViews, viewDef],
+				};
+
+				// Update the base table's meta to include this view
+				// This is a bit of a hack but works for the spike
+				(internalMeta as any).views = updatedMeta.views;
+
+				const viewMeta = {
+					...meta,
+					isView: true as const,
+					viewOf: name,
+				};
+
+				return createTableObject(
+					fullViewName,
+					schema,
+					zodShape,
+					viewMeta,
+					options,
+				);
+			};
+		},
+
+		get active(): Table<any, any> {
+			const softDeleteField = meta.softDeleteField;
+			if (!softDeleteField) {
+				throw new Error(
+					`Table "${name}" does not have a soft delete field. ` +
+						`Use .db.softDelete() to mark a field for soft delete.`,
+				);
+			}
+
+			// Return a view table - the view is already registered in meta.views
+			// during table() creation, so ensureTable will create it
+			const viewMeta = {
+				...meta,
+				isView: true as const,
+				viewOf: name,
+			};
+
+			return createTableObject(
+				`${name}__active`,
+				schema,
+				zodShape,
+				viewMeta,
+				options,
+			);
 		},
 	};
 

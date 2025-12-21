@@ -6,7 +6,7 @@
  */
 
 import type {Table, Row, Insert, FullTableOnly, WithRefs} from "./table.js";
-import {validateWithStandardSchema} from "./table.js";
+import {validateWithStandardSchema, getTableMeta} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
 import {
@@ -240,6 +240,23 @@ export function encodeData<T extends Table<any>>(
 import {decodeData} from "./table.js";
 // Re-export for backward compatibility
 export {decodeData};
+
+/**
+ * Check if a table is a view and throw an error if so.
+ * Views are read-only - mutations must use the base table.
+ */
+function assertNotView<T extends Table<any>>(
+	table: T,
+	operation: string,
+): void {
+	const meta = getTableMeta(table);
+	if (meta.isView) {
+		throw new Error(
+			`Cannot ${operation} on view "${table.name}". ` +
+				`Views are read-only. Use the base table "${meta.viewOf}" for mutations.`,
+		);
+	}
+}
 
 // ============================================================================
 // Driver Interface
@@ -872,6 +889,7 @@ export class Transaction {
 	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
 	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
+		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
 				buildSelectCols(tableArray);
@@ -891,7 +909,7 @@ export class Transaction {
 
 			// Add FROM <table>
 			queryStrings[queryStrings.length - 1] += " FROM ";
-			queryValues.push(ident(tableArray[0].name));
+			queryValues.push(ident(primaryTable.name));
 			queryStrings.push(" ");
 
 			// Merge WHERE template
@@ -941,6 +959,7 @@ export class Transaction {
 
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
+		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
 				buildSelectCols(tableArray);
@@ -960,7 +979,7 @@ export class Transaction {
 
 			// Add FROM <table>
 			queryStrings[queryStrings.length - 1] += " FROM ";
-			queryValues.push(ident(tableArray[0].name));
+			queryValues.push(ident(primaryTable.name));
 			queryStrings.push(" ");
 
 			// Merge WHERE template
@@ -994,6 +1013,8 @@ export class Transaction {
 		table: T & FullTableOnly<T>,
 		data: Insert<T> | Insert<T>[],
 	): Promise<Row<T> | Row<T>[]> {
+		assertNotView(table, "insert");
+
 		if (Array.isArray(data)) {
 			if (data.length === 0) {
 				return [];
@@ -1112,6 +1133,8 @@ export class Transaction {
 		| Promise<Row<T> | null>
 		| Promise<(Row<T> | null)[]>
 		| TaggedQuery<Row<T>[]> {
+		assertNotView(table, "update");
+
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				return this.#updateWithWhere(table, data, strings, values);
@@ -1436,6 +1459,8 @@ export class Transaction {
 		table: T,
 		idOrIds?: string | number | (string | number)[],
 	): Promise<number> | TaggedQuery<number> {
+		assertNotView(table, "delete");
+
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				const {strings: expandedStrings, values: expandedValues} =
@@ -1502,6 +1527,8 @@ export class Transaction {
 		table: T,
 		idOrIds?: string | number | (string | number)[],
 	): Promise<number> | TaggedQuery<number> {
+		assertNotView(table, "softDelete");
+
 		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
@@ -1901,6 +1928,7 @@ export class Database extends EventTarget {
 	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
 	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
+		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
 				buildSelectCols(tableArray);
@@ -1920,7 +1948,7 @@ export class Database extends EventTarget {
 
 			// Add FROM <table>
 			queryStrings[queryStrings.length - 1] += " FROM ";
-			queryValues.push(ident(tableArray[0].name));
+			queryValues.push(ident(primaryTable.name));
 			queryStrings.push(" ");
 
 			// Merge WHERE template
@@ -1987,6 +2015,7 @@ export class Database extends EventTarget {
 
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
+		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
 				buildSelectCols(tableArray);
@@ -2006,7 +2035,7 @@ export class Database extends EventTarget {
 
 			// Add FROM <table>
 			queryStrings[queryStrings.length - 1] += " FROM ";
-			queryValues.push(ident(tableArray[0].name));
+			queryValues.push(ident(primaryTable.name));
 			queryStrings.push(" ");
 
 			// Merge WHERE template
@@ -2059,6 +2088,8 @@ export class Database extends EventTarget {
 		table: T & FullTableOnly<T>,
 		data: Insert<T> | Insert<T>[],
 	): Promise<Row<T> | Row<T>[]> {
+		assertNotView(table, "insert");
+
 		// Handle array insert
 		if (Array.isArray(data)) {
 			if (data.length === 0) {
@@ -2192,6 +2223,8 @@ export class Database extends EventTarget {
 		| Promise<Row<T> | null>
 		| Promise<(Row<T> | null)[]>
 		| TaggedQuery<Row<T>[]> {
+		assertNotView(table, "update");
+
 		// Template overload - update with custom WHERE
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -2532,6 +2565,8 @@ export class Database extends EventTarget {
 		table: T,
 		idOrIds?: string | number | (string | number)[],
 	): Promise<number> | TaggedQuery<number> {
+		assertNotView(table, "delete");
+
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				const {strings: expandedStrings, values: expandedValues} =
@@ -2611,6 +2646,8 @@ export class Database extends EventTarget {
 		table: T,
 		idOrIds?: string | number | (string | number)[],
 	): Promise<number> | TaggedQuery<number> {
+		assertNotView(table, "softDelete");
+
 		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
@@ -3012,6 +3049,7 @@ export class Database extends EventTarget {
 	 * await db.ensureTable(Posts); // FK to Users - ensure Users first
 	 */
 	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		assertNotView(table, "ensureTable");
 		if (!this.#driver.ensureTable) {
 			throw new Error(
 				"Driver does not implement ensureTable(). " +
@@ -3052,6 +3090,7 @@ export class Database extends EventTarget {
 	async ensureConstraints<T extends Table<any>>(
 		table: T,
 	): Promise<EnsureResult> {
+		assertNotView(table, "ensureConstraints");
 		if (!this.#driver.ensureConstraints) {
 			throw new Error(
 				"Driver does not implement ensureConstraints(). " +

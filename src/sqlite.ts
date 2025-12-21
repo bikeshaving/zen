@@ -68,6 +68,52 @@ function buildSQL(
 }
 
 /**
+ * Build SQL with all values inlined (for DDL like CREATE VIEW).
+ * Values are escaped/quoted appropriately for SQLite.
+ */
+function buildSQLInlined(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): string {
+	let sql = strings[0];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLBuiltin(value)) {
+			sql += resolveSQLBuiltin(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			sql += quoteIdent(value.name) + strings[i + 1];
+		} else {
+			sql += inlineLiteral(value) + strings[i + 1];
+		}
+	}
+
+	return sql;
+}
+
+/**
+ * Convert a value to an inline SQL literal for SQLite.
+ */
+function inlineLiteral(value: unknown): string {
+	if (value === null || value === undefined) {
+		return "NULL";
+	}
+	if (typeof value === "boolean") {
+		return value ? "1" : "0";
+	}
+	if (typeof value === "number") {
+		return String(value);
+	}
+	if (typeof value === "string") {
+		return `'${value.replace(/'/g, "''")}'`;
+	}
+	if (value instanceof Date) {
+		return `'${value.toISOString()}'`;
+	}
+	return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/**
  * SQLite driver using better-sqlite3.
  *
  * @example
@@ -228,6 +274,12 @@ export default class SQLiteDriver implements Driver {
 	// ==========================================================================
 
 	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		const meta = getTableMeta(table);
+		if (meta.isView) {
+			throw new Error(
+				`Cannot ensure view "${table.name}". Use the base table "${meta.viewOf}" instead.`,
+			);
+		}
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;
@@ -263,6 +315,11 @@ export default class SQLiteDriver implements Driver {
 				await this.#checkMissingConstraints(table);
 			}
 
+			// Step 5: Ensure views exist
+			step = 5;
+			const viewsApplied = await this.#ensureViews(table);
+			applied = applied || viewsApplied;
+
 			return {applied};
 		} catch (error) {
 			if (error instanceof SchemaDriftError || error instanceof EnsureError) {
@@ -276,9 +333,50 @@ export default class SQLiteDriver implements Driver {
 		}
 	}
 
+	/**
+	 * Ensure all defined views exist for this table.
+	 * Creates views from the table's view definitions.
+	 */
+	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
+		const meta = getTableMeta(table);
+		const views = meta.views;
+		if (!views || views.length === 0) {
+			return false;
+		}
+
+		const tableName = table.name;
+		const quotedTable = quoteIdent(tableName);
+		let applied = false;
+
+		for (const viewDef of views) {
+			const viewName = `${tableName}__${viewDef.name}`;
+			const quotedView = quoteIdent(viewName);
+
+			const whereTemplate = viewDef.whereTemplate;
+			const whereSQL = buildSQLInlined(
+				whereTemplate[0],
+				whereTemplate.slice(1) as unknown[],
+			);
+
+			this.#db.exec(`DROP VIEW IF EXISTS ${quotedView}`);
+			this.#db.exec(
+				`CREATE VIEW ${quotedView} AS SELECT * FROM ${quotedTable} ${whereSQL}`,
+			);
+			applied = true;
+		}
+
+		return applied;
+	}
+
 	async ensureConstraints<T extends Table<any>>(
 		table: T,
 	): Promise<EnsureResult> {
+		const meta = getTableMeta(table);
+		if (meta.isView) {
+			throw new Error(
+				`Cannot ensure view "${table.name}". Use the base table "${meta.viewOf}" instead.`,
+			);
+		}
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;

@@ -1153,6 +1153,50 @@ describe("Soft Delete", () => {
 		});
 	});
 
+	describe("Soft delete filtering via Table.active", () => {
+		test("db.get(Table, id) does NOT auto-filter soft-deleted rows", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			(driver.get as any).mockImplementation(async () => null);
+
+			await db.get(SoftDeleteUsers, "123");
+
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			// Should NOT include soft delete filter - users must use Table.active
+			expect(sql).not.toContain("IS NULL");
+		});
+
+		test("tx.get(Table, id) does NOT auto-filter soft-deleted rows", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			(driver.get as any).mockImplementation(async () => null);
+
+			await db.transaction(async (tx) => {
+				await tx.get(SoftDeleteUsers, "123");
+			});
+
+			const [strings, values] = (driver.get as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			// Should NOT include soft delete filter - users must use Table.active
+			expect(sql).not.toContain("IS NULL");
+		});
+
+		test("template queries require manual filtering", async () => {
+			const driver = createMockDriver();
+			const db = new Database(driver);
+			(driver.all as any).mockImplementation(async () => []);
+
+			// User must add their own filter with template queries
+			await db.all(SoftDeleteUsers)`WHERE NOT ${SoftDeleteUsers.deleted()}`;
+
+			const [strings, values] = (driver.all as any).mock.calls[0];
+			const sql = buildSQL(strings, values);
+			// User's explicit filter should be present
+			expect(sql).toContain("IS NOT NULL");
+		});
+	});
+
 	describe("Transaction.softDelete()", () => {
 		test("soft deletes within transaction using DB timestamp", async () => {
 			const driver = createMockDriver();
