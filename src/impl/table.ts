@@ -1546,10 +1546,15 @@ function createViewObject<
 	};
 
 	// Table-like metadata (marks this as a view)
+	// Clear derived expressions - they reference the base table name which
+	// won't be in the FROM clause when querying the view
 	const tableMeta: TableMeta = {
 		...baseMeta,
 		isView: true,
 		viewOf: baseTable.name,
+		derivedExprs: undefined,
+		derivedFields: undefined,
+		isDerived: undefined,
 	};
 
 	const viewObj: View<T, Refs> = {
