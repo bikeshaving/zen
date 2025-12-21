@@ -253,6 +253,14 @@ await db.delete(Users, userId);
 const activeUsers = await db.all(Users)`
   WHERE NOT ${Users.deleted()}
 `;
+
+// Or use the .active view (auto-generated, read-only)
+const activeUsers = await db.all(Users.active)``;
+
+// JOINs with .active automatically filter deleted rows
+const posts = await db.all([Posts, Users.active])`
+  JOIN "users_active" ON ${Users.active.cols.id} = ${Posts.cols.authorId}
+`;
 ```
 
 **Compound indexes** via table options:
@@ -826,6 +834,22 @@ console.log(Posts.ddl().toString());
 | **Transactions** | ✅ | ✅ | ✅ |
 | **Advisory Locks** | ❌ | ✅ | ✅ (named) |
 
+### Zod to SQL Type Mapping
+
+| Zod Type | SQLite | PostgreSQL | MySQL |
+|----------|--------|------------|-------|
+| `z.string()` | TEXT | TEXT | TEXT |
+| `z.string().max(n)` (n ≤ 255) | TEXT | VARCHAR(n) | VARCHAR(n) |
+| `z.number()` | REAL | DOUBLE PRECISION | REAL |
+| `z.number().int()` | INTEGER | INTEGER | INTEGER |
+| `z.boolean()` | INTEGER | BOOLEAN | BOOLEAN |
+| `z.date()` | TEXT | TIMESTAMPTZ | DATETIME |
+| `z.enum([...])` | TEXT | TEXT | TEXT |
+| `z.object({...})` | TEXT | JSONB | TEXT |
+| `z.array(...)` | TEXT | JSONB | TEXT |
+
+Override with `.db.type("CUSTOM")` when using custom encode/decode.
+
 ## Public API Reference
 
 ### Core Exports
@@ -960,6 +984,9 @@ Users.pick("id", "email");     // PartialTable with subset of fields
 Users.derive("hasEmail", z.boolean())`
   ${Users.cols.email} IS NOT NULL
 `;
+
+// Views
+Users.active;                  // View excluding soft-deleted rows (read-only)
 ```
 
 ### Database Methods
