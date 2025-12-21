@@ -104,7 +104,6 @@ export default class PostgresDriver implements Driver {
 			max: options.max ?? 10,
 			idle_timeout: options.idleTimeout ?? 30,
 			connect_timeout: options.connectTimeout ?? 30,
-			onnotice: () => {}, // Suppress PostgreSQL NOTICE messages
 		});
 	}
 
