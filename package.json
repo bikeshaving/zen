@@ -105,7 +105,16 @@
     "postgres",
     "mysql"
   ],
+  "author": "Brian Kim <briankimdev@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bikeshaving/zen.git"
+  },
+  "homepage": "https://zendb.org",
+  "bugs": {
+    "url": "https://github.com/bikeshaving/zen/issues"
+  },
   "module": "./dist/src/zen.js",
   "types": "./dist/src/zen.d.ts"
 }
