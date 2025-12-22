@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2025-12-22
+
+### Added
+
+- Validation that compound constraints (`indexes`, `unique`, `references` options) have 2+ fields
+  - Single-field constraints now throw `TableDefinitionError` with helpful message pointing to field-level API
+
+### Fixed
+
+- **TypeScript types now work in published package** - Updated libuild to fix module augmentation and `.d.ts` path resolution
+
+### Changed
+
+- New tagline: "Define Zod tables. Write raw SQL. Get typed objects."
+
+### Documentation
+
+- Added `.db.inserted()`, `.db.updated()`, `.db.upserted()` documentation with examples
+- Added compound unique constraints example
+- Fixed table naming consistency (all plural)
+- Various README cleanups and improvements
+
 ## [0.1.2] - 2025-12-22
 
 ### Added
