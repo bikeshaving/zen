@@ -980,19 +980,15 @@ import type {
 
   // Fragment types
   SetValues,          // Values accepted by Table.set()
-  SQLFragment,        // SQL fragment object
-  DDLFragment,        // DDL fragment object
+  SQLTemplate,        // SQL template object (return type of set(), on(), etc.)
   SQLDialect,         // "sqlite" | "postgresql" | "mysql"
 
   // Driver types
   Driver,             // Driver interface for adapters
   TaggedQuery,        // Tagged template query function
 
-  // Expression types
-  DBExpression,       // Runtime database expression
-
   // Error types
-  DatabaseErrorCode,    // Error code string literals
+  DatabaseErrorCode,  // Error code string literals
 } from "@b9g/zen";
 ```
 
