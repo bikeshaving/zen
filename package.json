@@ -1,7 +1,7 @@
 {
   "name": "@b9g/zen",
   "version": "0.1.2",
-  "description": "The simple database client. Define tables. Write SQL. Get objects.",
+  "description": "Define Zod tables. Write raw SQL. Get typed objects.",
   "type": "module",
   "exports": {
     ".": {

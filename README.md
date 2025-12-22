@@ -1,6 +1,6 @@
 # ZenDB
 
-The simple database client. Define tables. Write SQL. Get objects.
+Define Zod tables. Write raw SQL. Get typed objects.
 
 [Website](https://zendb.org) · [GitHub](https://github.com/bikeshaving/zen) · [npm](https://www.npmjs.com/package/@b9g/zen)
 
