@@ -47,7 +47,7 @@ import SQLiteDriver from "@b9g/zen/sqlite";
 const driver = new SQLiteDriver("file:app.db");
 
 // 1. Define tables
-const Users = table("users", {
+let Users = table("users", {
   id: z.string().uuid().db.primary().db.auto(),
   email: z.string().email().db.unique(),
   name: z.string(),
@@ -73,14 +73,14 @@ db.addEventListener("upgradeneeded", (e) => {
     }
     if (e.oldVersion < 2) {
       // Evolve schema: add avatar column (safe, additive)
-      const UsersV2 = table("users", {
+      Users = table("users", {
         id: z.string().uuid().db.primary().db.auto(),
         email: z.string().email().db.unique(),
         name: z.string(),
-        avatar: z.string().optional(),
+        avatar: z.string().optional(),  // new field
       });
-      await db.ensureTable(UsersV2);          // adds missing columns/indexes
-      await db.ensureConstraints(UsersV2);    // applies new constraints on existing data
+      await db.ensureTable(Users);          // adds missing columns/indexes
+      await db.ensureConstraints(Users);    // applies new constraints on existing data
     }
   })());
 });
@@ -116,11 +116,12 @@ Zen is the missing link between SQL and typed data. By writing tables with Zod s
 
 ### What Zen is not:
 - **Zen is not a query builder** — Rather than using a fluent query builder interface (`.where().orderBy().limit()`), Zen uses explicit SQL tagged template functions instead
-  ```
-  db.get(Posts)`
-    WHERE ${Posts.cols.published} = ${true}
-    ORDER BY ${Posts.cols.publishDate}
-    DESC LIMIT 20
+  ```typescript
+db.all(Posts)`
+  WHERE ${Posts.cols.published} = ${true}
+  ORDER BY ${Posts.cols.publishDate} DESC
+  LIMIT 20
+`;
   ```.
 - **Zen is not an ORM** — Tables are not classes, they are Zod-powered singletons which provide schema-aware SQL-fragment helpers. These tables can be passed to CRUD helpers to validate writes, generate DDL, and normalize joined data into an object graph.
 - **Zen is not a startup** — Zen is an open-source library, not a venture-backed SaaS. There will never be a managed “ZenDB” instance or a “Zen Studio.” The library is a thin wrapper around Zod and JavaScript SQL drivers, with a focus on runtime abstractions rather than complicated tooling.
@@ -217,6 +218,33 @@ const user = await db.insert(Users, {name: "Alice"});
 user.id;        // "550e8400-e29b-41d4-a716-446655440000"
 user.createdAt; // 2024-01-15T10:30:00.000Z
 ```
+
+**Default values with `.db.inserted()`, `.db.updated()`, `.db.upserted()`:**
+
+These methods set default values for write operations. They accept JS functions or SQL builtins (`NOW`, `TODAY`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME`):
+
+```typescript
+import {z, table, NOW} from "@b9g/zen";
+
+const Posts = table("posts", {
+  id: z.string().uuid().db.primary().db.auto(),
+  title: z.string(),
+  // JS function — runs client-side
+  slug: z.string().db.inserted(() => generateSlug()),
+  // SQL builtin — runs database-side
+  createdAt: z.date().db.inserted(NOW),
+  updatedAt: z.date().db.upserted(NOW),  // set on insert AND update
+  viewCount: z.number().db.inserted(() => 0).db.updated(() => 0), // reset on update
+});
+```
+
+| Method | When applied | Field becomes optional for |
+|--------|--------------|---------------------------|
+| `.db.inserted(value)` | INSERT only | insert |
+| `.db.updated(value)` | UPDATE only | update |
+| `.db.upserted(value)` | INSERT and UPDATE | insert and update |
+
+**Why not Zod's `.default()`?** Zod's `.default()` applies at *parse time*, not *write time*. This means defaults would be applied when reading data, not when inserting. Zen throws an error if you use `.default()` — use `.db.inserted()` instead.
 
 **Automatic JSON encoding/decoding:**
 
