@@ -386,6 +386,55 @@ const posts = await db.all([Posts, UserSummary])`
 
 **Table identity**: A table definition is a singleton value which is passed to database methods for validation, normalization, schema management, and convenient CRUD operations. It is not a class.
 
+## Views
+
+Views are read-only projections of tables with predefined WHERE clauses:
+
+```typescript
+import {z, table, view} from "@b9g/zen";
+
+const Users = table("users", {
+  id: z.string().db.primary(),
+  name: z.string(),
+  role: z.enum(["user", "admin"]),
+  deletedAt: z.date().nullable().db.softDelete(),
+});
+
+// Define views with explicit names
+const ActiveUsers = view("active_users", Users)`
+  WHERE ${Users.cols.deletedAt} IS NULL
+`;
+
+const AdminUsers = view("admin_users", Users)`
+  WHERE ${Users.cols.role} = ${"admin"}
+`;
+
+// Query from views (same API as tables)
+const admins = await db.all(AdminUsers)``;
+const admin = await db.get(AdminUsers, "u1");
+
+// Views are read-only — mutations throw errors
+await db.insert(AdminUsers, {...});  // ✗ Error
+await db.update(AdminUsers, {...});  // ✗ Error
+await db.delete(AdminUsers, "u1");   // ✗ Error
+```
+
+**Auto-generated `.active` view:** Tables with a `.db.softDelete()` field automatically get an `.active` view:
+
+```typescript
+// Equivalent to: view("users_active", Users)`WHERE deletedAt IS NULL`
+const activeUsers = await db.all(Users.active)``;
+```
+
+**Views preserve table relationships:** Views inherit references from their base table, so JOINs work identically:
+
+```typescript
+const posts = await db.all([Posts, AdminUsers])`
+  JOIN "admin_users" ON ${AdminUsers.on(Posts)}
+`;
+posts[0].author?.role; // "admin"
+```
+
 ## Queries
 
 Tagged templates with automatic parameterization:
@@ -852,6 +901,8 @@ await db.transaction(async (tx) => {
 - `AlreadyExistsError` — Unique constraint violated (tableName, field, value)
 - `QueryError` — SQL execution failed (sql)
 - `MigrationError` / `MigrationLockError` — Migration failures (fromVersion, toVersion)
+- `EnsureError` — Schema ensure operation failed (operation, table, step)
+- `SchemaDriftError` — Existing schema doesn't match definition (table, drift)
 - `ConnectionError` / `TransactionError` — Connection/transaction issues
 
 ## Debugging
@@ -922,9 +973,11 @@ import {
   // Zod (extended with .db namespace)
   z,                  // Re-exported Zod with .db already available
 
-  // Table definition
+  // Table and view definition
   table,              // Create a table definition from Zod schema
+  view,               // Create a read-only view from a table
   isTable,            // Type guard for Table objects
+  isView,             // Type guard for View objects
   extendZod,          // Extend a separate Zod instance (advanced)
 
   // Database
