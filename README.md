@@ -115,14 +115,14 @@ await db.update(Users, {name: "Alice Smith"}, user.id);
 Zen is the missing link between SQL and typed data. By writing tables with Zod schema, you get idempotent migration helpers, typed CRUD, normalized object references, and many features other database clients cannot provide.
 
 ### What Zen is not:
-- **Zen is not a query builder** — Rather than using a fluent query builder interface (`.where().orderBy().limit()`), Zen uses explicit SQL tagged template functions instead
+- **Zen is not a query builder** — Rather than using a fluent query builder interface (`.where().orderBy().limit()`), Zen uses explicit SQL tagged template functions instead.
   ```typescript
     db.all(Posts)`
       WHERE ${Posts.cols.published} = ${true}
       ORDER BY ${Posts.cols.publishDate} DESC
       LIMIT 20
     `;
-  ```.
+  ```
 - **Zen is not an ORM** — Tables are not classes, they are Zod-powered singletons which provide schema-aware SQL-fragment helpers. These tables can be passed to CRUD helpers to validate writes, generate DDL, and normalize joined data into an object graph.
 - **Zen is not a startup** — Zen is an open-source library, not a venture-backed SaaS. There will never be a managed “ZenDB” instance or a “Zen Studio.” The library is a thin wrapper around Zod and JavaScript SQL drivers, with a focus on runtime abstractions rather than complicated tooling.
 
