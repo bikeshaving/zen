@@ -115,8 +115,8 @@ await db.update(Users, {name: "Alice Smith"}, user.id);
 Zen is the missing link between SQL and typed data. By writing tables with Zod schema, you get idempotent migration helpers, typed CRUD, normalized object references, and many features other database clients cannot provide.
 
 ### What Zen is not:
-- **Zen is not a query builder** — Rather than fluent query building `.where().orderBy().limit()` chains, you write SQL directly: `` db.all(Posts)`WHERE published = ${true} ORDER BY created_at DESC LIMIT 20` ``
-- **Zen is not an ORM** — Tables are not classes, they are Zod-powered singletons which provide schema-aware SQL-fragment helpers. These tables can be passed to CRUD helpers to validate writes, generate DDL, and normalize joined data into an object graph.
+- **Zen is not a query builder** — Rather than building SQL with fluent chains `.where().orderBy().limit()`, you write it directly with templates: `` db.all(Posts)`WHERE published = ${true} ORDER BY created_at DESC LIMIT 20` `` Helper functions help you write the tedious parts of SQL without hiding it or limiting your queries.
+- **Zen is not an ORM** — Tables are not classes. They are Zod-powered singletons which provide schema-aware utilities. These tables can be used to validate writes, generate DDL, and deduplicate joined data.
 - **Zen is not a startup** — Zen is an open-source library, not a venture-backed SaaS. There will never be a managed “ZenDB” instance or a “Zen Studio.” The library is a thin wrapper around Zod and JavaScript SQL drivers, with a focus on runtime abstractions rather than complicated tooling.
 
 ### Safety
@@ -126,9 +126,6 @@ Zen is the missing link between SQL and typed data. By writing tables with Zod s
 - **No down migrations** — Forward-only versioning (1 → 2 → 3)
 - **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()`
 - **No automatic migrations** — Schema changes are explicit in upgrade events
-
-Migrations are **additive and idempotent** by design. Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema evolution. Breaking changes require multi-step migrations. Rollbacks are new forward migrations.
-
 
 ## Table Definitions
 
@@ -491,6 +488,29 @@ await db.exec`CREATE INDEX idx_posts_author ON ${Posts}(${Posts.cols.authorId})`
 const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
 ```
 
+## CRUD Helpers
+```typescript
+// Insert with Zod validation (uses RETURNING to get actual row)
+const user = await db.insert(Users, {
+  email: "alice@example.com",
+  name: "Alice",
+});
+// Returns actual row from DB, including auto-generated id and DB-computed defaults
+const userId = user.id;
+
+// Update by primary key (uses RETURNING)
+const updated = await db.update(Users, {name: "Bob"}, userId);
+
+// Delete by primary key
+await db.delete(Users, userId);
+
+// Soft delete (sets deletedAt timestamp, requires softDelete() field)
+await db.softDelete(Users, userId);
+```
+
+**RETURNING support:** `insert()` and `update()` use `RETURNING *` on SQLite and PostgreSQL to return the actual row from the database, including DB-computed defaults and triggers. MySQL falls back to a separate SELECT.
+
+
 ## Fragment Helpers
 
 Type-safe SQL fragments as methods on Table objects:
@@ -539,29 +559,6 @@ const posts = await db.all(Posts)`WHERE ${Posts.in("id", postIds)}`;
 const posts = await db.all(Posts)`WHERE ${Posts.in("id", [])}`;
 // → WHERE 1 = 0
 ```
-
-## CRUD Helpers
-
-```typescript
-// Insert with Zod validation (uses RETURNING to get actual row)
-const user = await db.insert(Users, {
-  email: "alice@example.com",
-  name: "Alice",
-});
-// Returns actual row from DB, including auto-generated id and DB-computed defaults
-const userId = user.id;
-
-// Update by primary key (uses RETURNING)
-const updated = await db.update(Users, {name: "Bob"}, userId);
-
-// Delete by primary key
-await db.delete(Users, userId);
-
-// Soft delete (sets deletedAt timestamp, requires softDelete() field)
-await db.softDelete(Users, userId);
-```
-
-**RETURNING support:** `insert()` and `update()` use `RETURNING *` on SQLite and PostgreSQL to return the actual row from the database, including DB-computed defaults and triggers. MySQL falls back to a separate SELECT.
 
 ## Transactions
 
@@ -839,6 +836,7 @@ const refs = Posts.references();      // [{fieldName: "authorId", table: Users, 
 - Tagged template queries are cached by template object identity (compiled once per call site)
 - Normalization cost is O(rows) with hash maps per table
 - Reference resolution is zero-cost after deduplication
+- Zod validation happens on writes, never on reads.
 
 ## Driver Interface
 
