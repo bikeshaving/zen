@@ -532,6 +532,8 @@ export default class BunDriver implements Driver {
 				transaction: async () => {
 					throw new Error("Nested transactions are not supported");
 				},
+				getColumns: this.getColumns.bind(this),
+				explain: this.explain.bind(this),
 			};
 
 			return await fn(txDriver);
@@ -731,6 +733,20 @@ export default class BunDriver implements Driver {
 		tableName: string,
 	): Promise<{name: string; type?: string; notnull?: boolean}[]> {
 		return await this.#getColumns(tableName);
+	}
+
+	async explain(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<Record<string, unknown>[]> {
+		await this.#ensureSqliteInit();
+		const {sql, params} = buildSQL(strings, values, this.#dialect);
+		const explainPrefix =
+			this.#dialect === "sqlite" ? "EXPLAIN QUERY PLAN " : "EXPLAIN ";
+		return (await this.#sql.unsafe(
+			explainPrefix + sql,
+			params as any[],
+		)) as Record<string, unknown>[];
 	}
 
 	// ==========================================================================

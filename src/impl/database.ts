@@ -28,7 +28,6 @@ import {
 	makeTemplate,
 } from "./template.js";
 import {EnsureError} from "./errors.js";
-
 // ============================================================================
 // DB Expressions - Runtime values evaluated by the database
 // ============================================================================
@@ -458,10 +457,16 @@ export interface Driver {
 		toField: string,
 	): Promise<number>;
 
-	/** Optional introspection: list columns for a table (name, type, nullability). */
-	getColumns?(
+	/** Introspection: list columns for a table (name, type, nullability). */
+	getColumns(
 		tableName: string,
 	): Promise<{name: string; type?: string; notnull?: boolean}[]>;
+
+	/** Get the query execution plan for a SQL query. */
+	explain(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<Record<string, unknown>[]>;
 }
 
 // ============================================================================
@@ -3103,6 +3108,30 @@ export class Database extends EventTarget {
 		return {sql, params: expandedValues};
 	}
 
+	/**
+	 * Get the query execution plan without running the query.
+	 *
+	 * Returns the database's EXPLAIN output for the given query.
+	 * The format varies by database:
+	 * - SQLite: EXPLAIN QUERY PLAN output
+	 * - PostgreSQL: EXPLAIN output
+	 * - MySQL: EXPLAIN output
+	 *
+	 * @example
+	 * const plan = await db.explain`SELECT * FROM ${Users} WHERE email = ${"test@example.com"}`;
+	 * console.log(plan);
+	 */
+	async explain(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Promise<Record<string, unknown>[]> {
+		const {strings: expandedStrings, values: expandedValues} = expandFragments(
+			strings,
+			values,
+		);
+		return await this.#driver.explain(expandedStrings, expandedValues);
+	}
+
 	// ==========================================================================
 	// Schema Ensure Methods
 	// ==========================================================================
@@ -3316,41 +3345,8 @@ export class Database extends EventTarget {
 		tableName: string,
 		columnName: string,
 	): Promise<boolean> {
-		// Use driver's getColumns if available
-		if (this.#driver.getColumns) {
-			const columns = await this.#driver.getColumns(tableName);
-			return columns.some((col) => col.name === columnName);
-		}
-
-		// Try PRAGMA table_info first (SQLite)
-		try {
-			const pragmaStrings = makeTemplate(["PRAGMA table_info(", ")"]);
-			const pragmaValues = [ident(tableName)];
-			const columns = await this.#driver.all<{name: string}>(
-				pragmaStrings,
-				pragmaValues,
-			);
-			if (columns.length > 0) {
-				return columns.some((col) => col.name === columnName);
-			}
-		} catch {
-			// Not SQLite, try information_schema
-		}
-
-		// Fallback: information_schema (PostgreSQL/MySQL)
-		try {
-			const schemaStrings = makeTemplate([
-				"SELECT column_name FROM information_schema.columns WHERE table_name = ",
-				" AND column_name = ",
-				" LIMIT 1",
-			]);
-			const schemaValues = [tableName, columnName];
-			const result = await this.#driver.all(schemaStrings, schemaValues);
-			return result.length > 0;
-		} catch {
-			// Last resort: assume column exists and let the UPDATE fail naturally
-			return true;
-		}
+		const columns = await this.#driver.getColumns(tableName);
+		return columns.some((col) => col.name === columnName);
 	}
 
 	// ==========================================================================

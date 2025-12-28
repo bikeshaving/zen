@@ -379,6 +379,8 @@ export default class MySQLDriver implements Driver {
 				transaction: async () => {
 					throw new Error("Nested transactions are not supported");
 				},
+				getColumns: this.getColumns.bind(this),
+				explain: this.explain.bind(this),
 			};
 
 			const result = await fn(txDriver);
@@ -604,7 +606,7 @@ export default class MySQLDriver implements Driver {
 		return ((rows as any[])[0]?.count ?? 0) > 0;
 	}
 
-	async #getColumns(
+	async getColumns(
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
 		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
@@ -617,6 +619,15 @@ export default class MySQLDriver implements Driver {
 			type: row.DATA_TYPE,
 			notnull: row.IS_NULLABLE === "NO",
 		}));
+	}
+
+	async explain(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<Record<string, unknown>[]> {
+		const {sql, params} = buildSQL(strings, values);
+		const [rows] = await this.#pool.execute(`EXPLAIN ${sql}`, params);
+		return rows as Record<string, unknown>[];
 	}
 
 	async #getIndexes(
@@ -698,7 +709,7 @@ export default class MySQLDriver implements Driver {
 	}
 
 	async #ensureMissingColumns(table: Table): Promise<boolean> {
-		const existingCols = await this.#getColumns(table.name);
+		const existingCols = await this.getColumns(table.name);
 		const existingColNames = new Set(existingCols.map((c) => c.name));
 		const schemaFields = Object.keys(table.schema.shape);
 

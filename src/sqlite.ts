@@ -482,7 +482,7 @@ export default class SQLiteDriver implements Driver {
 		return result.length > 0;
 	}
 
-	async #getColumns(
+	async getColumns(
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
 		const result = this.#db
@@ -493,6 +493,16 @@ export default class SQLiteDriver implements Driver {
 			type: row.type,
 			notnull: row.notnull === 1,
 		}));
+	}
+
+	async explain(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<Record<string, unknown>[]> {
+		const {sql, params} = buildSQL(strings, values);
+		return this.#db
+			.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+			.all(...params) as Record<string, unknown>[];
 	}
 
 	async #getIndexes(
@@ -579,7 +589,7 @@ export default class SQLiteDriver implements Driver {
 	async #ensureMissingColumns<T extends Table<any>>(
 		table: T,
 	): Promise<boolean> {
-		const existingCols = await this.#getColumns(table.name);
+		const existingCols = await this.getColumns(table.name);
 		const existingColNames = new Set(existingCols.map((c) => c.name));
 		const schemaFields = Object.keys(table.schema.shape);
 

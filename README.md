@@ -595,14 +595,16 @@ IndexedDB-style event-based migrations:
 db.addEventListener("upgradeneeded", (e) => {
   e.waitUntil((async () => {
     if (e.oldVersion < 1) {
-      await db.exec`${Users.ddl()}`;
-      await db.exec`${Posts.ddl()}`;
+      await db.ensureTable(Users);
+      await db.ensureTable(Posts);
     }
     if (e.oldVersion < 2) {
-      await db.exec`${Posts.ensureColumn("views")}`;
+      // Add a new column - just update the schema and call ensureTable again
+      await db.ensureTable(Posts); // Adds missing "views" column
     }
     if (e.oldVersion < 3) {
-      await db.exec`${Posts.ensureIndex(["title"])}`;
+      // Add constraints after data cleanup
+      await db.ensureConstraints(Posts);
     }
   })());
 });
@@ -623,7 +625,7 @@ await db.open(3); // Opens at version 3, fires upgradeneeded if needed
 zen provides idempotent helpers that encourage safe, additive-only migrations:
 
 ```typescript
-// Add a new column (reads from schema)
+// Add a new column - update schema and call ensureTable
 const Posts = table("posts", {
   id: z.string().db.primary(),
   title: z.string(),
@@ -631,24 +633,32 @@ const Posts = table("posts", {
 });
 
 if (e.oldVersion < 2) {
-  await db.exec`${Posts.ensureColumn("views")}`;
+  await db.ensureTable(Posts); // Adds missing columns from schema
 }
-// → ALTER TABLE "posts" ADD COLUMN IF NOT EXISTS "views" REAL DEFAULT 0
+// → ALTER TABLE "posts" ADD COLUMN "views" REAL DEFAULT 0
 
-// Add an index
+// Add indexes - defined in schema, applied by ensureTable
+const Posts = table("posts", {
+  id: z.string().db.primary(),
+  title: z.string().db.index(), // NEW - add index
+  views: z.number().db.inserted(() => 0),
+});
+
 if (e.oldVersion < 3) {
-  await db.exec`${Posts.ensureIndex(["title", "views"])}`;
+  await db.ensureTable(Posts); // Adds missing indexes
 }
-// → CREATE INDEX IF NOT EXISTS "idx_posts_title_views" ON "posts"("title", "views")
+// → CREATE INDEX IF NOT EXISTS "idx_posts_title" ON "posts"("title")
 
 // Safe column rename (additive, non-destructive)
 const Users = table("users", {
-  emailAddress: z.string().email(), // renamed from "email"
+  id: z.string().db.primary(),
+  email: z.string().email(), // Keep old column
+  emailAddress: z.string().email(), // NEW - add new column
 });
 
 if (e.oldVersion < 4) {
-  await db.exec`${Users.ensureColumn("emailAddress")}`;
-  await db.exec`${Users.copyColumn("email", "emailAddress")}`;
+  await db.ensureTable(Users); // Adds emailAddress column
+  await db.copyColumn(Users, "email", "emailAddress"); // Copy data
   // Keep old "email" column for backwards compat
   // Drop it in a later migration if needed (manual SQL)
 }
@@ -656,9 +666,10 @@ if (e.oldVersion < 4) {
 ```
 
 **Helper methods:**
-- `table.ensureColumn(fieldName, options?)` - Idempotent ALTER TABLE ADD COLUMN
-- `table.ensureIndex(fields, options?)` - Idempotent CREATE INDEX
-- `table.copyColumn(from, to)` - Copy data between columns (for safe renames)
+- `db.ensureTable(table)` - Idempotent CREATE TABLE / ADD COLUMN / CREATE INDEX
+- `db.ensureView(view)` - Idempotent DROP + CREATE VIEW
+- `db.ensureConstraints(table)` - Add unique/FK constraints (with preflight checks)
+- `db.copyColumn(table, from, to)` - Copy data between columns (for safe renames)
 
 All helpers read from your table schema (single source of truth) and are safe to run multiple times (idempotent).
 
@@ -937,25 +948,9 @@ const query = db.print`SELECT * FROM ${Posts} WHERE ${Posts.cols.published} = ${
 console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = ?
 console.log(query.params);  // [true]
 
-// Inspect DDL generation
-const ddl = db.print`${Posts.ddl()}`;
-console.log(ddl.sql);  // CREATE TABLE IF NOT EXISTS "posts" (...)
-
-// Analyze query execution plan
-const plan = await db.explain`
-  SELECT * FROM ${Posts}
-  WHERE ${Posts.cols.authorId} = ${userId}
-`;
-console.log(plan);
-// SQLite: [{ detail: "SEARCH posts USING INDEX idx_posts_authorId (authorId=?)" }]
-// PostgreSQL: [{ "QUERY PLAN": "Index Scan using idx_posts_authorId on posts" }]
-
 // Debug fragments
 console.log(Posts.set({ title: "Updated" }).toString());
 // SQLFragment { sql: "\"title\" = ?", params: ["Updated"] }
-
-console.log(Posts.ddl().toString());
-// DDLFragment { type: "create-table", table: "posts" }
 ```
 
 ## Dialect Support
@@ -1085,12 +1080,6 @@ const Posts = table("posts", {
 
 const rows = [{id: "u1", email: "alice@example.com", deletedAt: null}];
 
-// DDL Generation
-Users.ddl();                     // DDLFragment for CREATE TABLE
-Users.ensureColumn("emailAddress"); // DDLFragment for ALTER TABLE ADD COLUMN
-Users.ensureIndex(["email"]);    // DDLFragment for CREATE INDEX
-Users.copyColumn("email", "emailAddress"); // SQLFragment for UPDATE (copy data)
-
 // Query Fragments
 Users.set({email: "alice@example.com"}); // SQLFragment for SET clause
 Users.values(rows);                      // SQLFragment for INSERT VALUES
@@ -1157,9 +1146,15 @@ await db.transaction(async (tx) => {
   await tx.exec`SELECT 1`;
 });
 
+// Schema Management
+await db.ensureTable(Users);           // CREATE TABLE / ADD COLUMN / CREATE INDEX
+await db.ensureView(AdminUsers);       // DROP + CREATE VIEW
+await db.ensureConstraints(Users);     // Add unique/FK constraints
+await db.copyColumn(Users, "old", "new"); // Copy data between columns
+
 // Debugging
-db.print`SELECT 1`;
-await db.explain`SELECT * FROM ${Users}`;
+db.print`SELECT 1`;                       // Returns { sql, params } without executing
+await db.explain`SELECT * FROM ${Users}`; // Returns query execution plan
 ```
 
 ### Driver Exports

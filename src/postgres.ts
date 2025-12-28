@@ -331,6 +331,8 @@ export default class PostgresDriver implements Driver {
 				transaction: async () => {
 					throw new Error("Nested transactions are not supported");
 				},
+				getColumns: this.getColumns.bind(this),
+				explain: this.explain.bind(this),
 			};
 
 			return await fn(txDriver);
@@ -541,7 +543,7 @@ export default class PostgresDriver implements Driver {
 		return result[0]?.exists ?? false;
 	}
 
-	async #getColumns(
+	async getColumns(
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
 		const result = await this.#sql<
@@ -559,6 +561,17 @@ export default class PostgresDriver implements Driver {
 			type: row.data_type,
 			notnull: row.is_nullable === "NO",
 		}));
+	}
+
+	async explain(
+		strings: TemplateStringsArray,
+		values: unknown[],
+	): Promise<Record<string, unknown>[]> {
+		const {sql, params} = buildSQL(strings, values);
+		return await this.#sql.unsafe<Record<string, unknown>[]>(
+			`EXPLAIN ${sql}`,
+			params as any[],
+		);
 	}
 
 	async #getIndexes(
@@ -651,7 +664,7 @@ export default class PostgresDriver implements Driver {
 	}
 
 	async #ensureMissingColumns(table: Table): Promise<boolean> {
-		const existingCols = await this.#getColumns(table.name);
+		const existingCols = await this.getColumns(table.name);
 		const existingColNames = new Set(existingCols.map((c) => c.name));
 		const schemaFields = Object.keys(table.schema.shape);
 
