@@ -524,13 +524,17 @@ describe("unregistered table validation", () => {
 	});
 });
 
-describe("type coercion", () => {
-	test("coerces date strings to Date objects", () => {
+describe("type decoding", () => {
+	// Zen handles DB→JS type conversion via decodeData, not Zod coercion.
+	// Use z.date(), z.boolean(), z.number() - not z.coerce.*
+	// Zod transforms/coercion only run on writes, never on reads.
+
+	test("decodes date strings to Date objects", () => {
 		const events = table("events", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			// z.coerce.date() converts string → Date
-			createdAt: z.coerce.date(),
+			// Use z.date() - Zen's decodeData handles string→Date conversion
+			createdAt: z.date(),
 		});
 
 		const rows = [
@@ -547,21 +551,22 @@ describe("type coercion", () => {
 		expect(results[0].createdAt.toISOString()).toBe("2024-01-15T10:30:00.000Z");
 	});
 
-	test("coerces number strings to numbers", () => {
+	test("numbers from DB stay as numbers", () => {
 		const products = table("products", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			// z.coerce.number() converts string → number
-			price: z.coerce.number(),
-			quantity: z.coerce.number().int(),
+			// Use z.number() - DB drivers return numbers as numbers
+			price: z.number(),
+			quantity: z.number().int(),
 		});
 
+		// Real DB drivers return numbers, not strings
 		const rows = [
 			{
 				"products.id": "p1",
 				"products.name": "Widget",
-				"products.price": "19.99",
-				"products.quantity": "42",
+				"products.price": 19.99,
+				"products.quantity": 42,
 			},
 		];
 
@@ -573,12 +578,12 @@ describe("type coercion", () => {
 		expect(typeof results[0].quantity).toBe("number");
 	});
 
-	test("coerces boolean strings/numbers to booleans", () => {
+	test("decodes boolean 0/1 to true/false", () => {
 		const flags = table("flags", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			// z.coerce.boolean() converts truthy/falsy → boolean
-			enabled: z.coerce.boolean(),
+			// Use z.boolean() - Zen's decodeData handles 0/1→boolean conversion
+			enabled: z.boolean(),
 		});
 
 		const rows = [
@@ -601,7 +606,7 @@ describe("type coercion", () => {
 		expect(results[1].enabled).toBe(false);
 	});
 
-	test("coercion works with joins", () => {
+	test("decoding works with joins", () => {
 		const authors = table("authors", {
 			id: z.string().db.primary(),
 			name: z.string(),
@@ -611,8 +616,8 @@ describe("type coercion", () => {
 			id: z.string().db.primary(),
 			authorId: z.string().db.references(authors, "author"),
 			title: z.string(),
-			publishedAt: z.coerce.date(),
-			viewCount: z.coerce.number().int(),
+			publishedAt: z.date(),
+			viewCount: z.number().int(),
 		});
 
 		const rows = [
@@ -621,7 +626,7 @@ describe("type coercion", () => {
 				"articles.authorId": "u1",
 				"articles.title": "Hello World",
 				"articles.publishedAt": "2024-06-01T00:00:00.000Z",
-				"articles.viewCount": "1234",
+				"articles.viewCount": 1234,
 				"authors.id": "u1",
 				"authors.name": "Alice",
 			},
