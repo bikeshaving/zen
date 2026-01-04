@@ -809,38 +809,109 @@ export type FieldType =
 	| "hidden";
 
 export interface FieldMeta {
-	// Field identity
+	// =========================================================================
+	// Raw schema access (preferred)
+	// =========================================================================
+
+	/** Field name (the key in the schema) */
 	name: string;
+
+	/** Raw Zod schema - use Zod APIs for introspection (isOptional(), etc.) */
+	schema: z.ZodType;
+
+	/** Raw database metadata from .db.*() methods */
+	db: FieldDBMeta;
+
+	// =========================================================================
+	// Deprecated: cooked properties for backwards compatibility
+	// These will be removed in a future major version.
+	// Use `schema` and `db` properties instead.
+	// =========================================================================
+
+	/**
+	 * @deprecated Use `schema` with Zod APIs instead. This form-specific type
+	 * inference will move to a separate @b9g/forms package.
+	 */
 	type: FieldType;
+
+	/**
+	 * @deprecated Use `!schema.isOptional() && !db.autoIncrement && !db.inserted` instead.
+	 */
 	required: boolean;
 
-	// From .db.*() methods
+	/**
+	 * @deprecated Use `db.primaryKey` instead.
+	 */
 	primaryKey?: boolean;
+
+	/**
+	 * @deprecated Use `db.unique` instead.
+	 */
 	unique?: boolean;
+
+	/**
+	 * @deprecated Use `db.indexed` instead.
+	 */
 	indexed?: boolean;
+
+	/**
+	 * @deprecated Use `db.softDelete` instead.
+	 */
 	softDelete?: boolean;
+
+	/**
+	 * @deprecated Use `db.reference` instead.
+	 */
 	reference?: {
 		table: Table;
 		field: string;
 		as: string;
 		onDelete?: "cascade" | "set null" | "restrict";
 	};
+
+	/**
+	 * @deprecated Use `db.encode` instead.
+	 */
 	encode?: (value: any) => any;
+
+	/**
+	 * @deprecated Use `db.decode` instead.
+	 */
 	decode?: (value: any) => any;
+
+	/**
+	 * @deprecated Use `db.columnType` instead.
+	 */
 	columnType?: string;
+
+	/**
+	 * @deprecated Use `db.autoIncrement` instead.
+	 */
 	autoIncrement?: boolean;
+
+	/**
+	 * @deprecated Use `db.inserted` instead.
+	 */
 	inserted?: {
 		type: "sql" | "symbol" | "function";
 		template?: SQLTemplate;
 		symbol?: SQLBuiltin;
 		fn?: () => unknown;
 	};
+
+	/**
+	 * @deprecated Use `db.updated` instead.
+	 */
 	updated?: {
 		type: "sql" | "symbol" | "function";
 		template?: SQLTemplate;
 		symbol?: SQLBuiltin;
 		fn?: () => unknown;
 	};
+
+	/**
+	 * @deprecated Use `db.upserted` instead.
+	 */
 	upserted?: {
 		type: "sql" | "symbol" | "function";
 		template?: SQLTemplate;
@@ -848,12 +919,34 @@ export interface FieldMeta {
 		fn?: () => unknown;
 	};
 
-	// From Zod schema
+	/**
+	 * @deprecated Extract from Zod schema directly.
+	 */
 	default?: unknown;
+
+	/**
+	 * @deprecated Extract from Zod schema directly.
+	 */
 	maxLength?: number;
+
+	/**
+	 * @deprecated Extract from Zod schema directly.
+	 */
 	minLength?: number;
+
+	/**
+	 * @deprecated Extract from Zod schema directly.
+	 */
 	min?: number;
+
+	/**
+	 * @deprecated Extract from Zod schema directly.
+	 */
 	max?: number;
+
+	/**
+	 * @deprecated Extract from Zod schema directly (for ZodEnum).
+	 */
 	options?: readonly string[];
 
 	/** Additional user-defined metadata from Zod's .meta() (label, helpText, widget, etc.) */
@@ -2424,13 +2517,18 @@ function extractFieldMeta(
 	const {db: _db, ...userMeta} = collectedMeta;
 
 	const meta: FieldMeta = {
+		// New: raw schema access (preferred)
 		name,
+		schema: zodType,
+		db: dbMeta,
+
+		// Deprecated: cooked properties for backwards compatibility
 		type: "text",
 		required: !isOptional && !isNullable && !hasDefault,
 		...userMeta, // Spread user-defined metadata (label, helpText, widget, etc.)
 	};
 
-	// Apply database metadata - merge all FieldDBMeta properties
+	// Apply database metadata - merge all FieldDBMeta properties (deprecated, use meta.db instead)
 	if (dbMeta.primaryKey) meta.primaryKey = true;
 	if (dbMeta.unique) meta.unique = true;
 	if (dbMeta.indexed) meta.indexed = true;
