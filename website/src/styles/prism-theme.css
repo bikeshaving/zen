@@ -1,0 +1,119 @@
+/*
+ * Prism theme for ZenDB — a Coldark-inspired palette wired to CSS variables so
+ * it adapts to the light/dark color scheme. Token colors are tuned to sit on
+ * the goldenrod-accented ZenDB surfaces.
+ */
+
+:root {
+	--tok-comment: #8a94a7;
+	--tok-punctuation: #b3bccb;
+	--tok-keyword: #e0a04c;
+	--tok-string: #7ec9a0;
+	--tok-number: #d98a8a;
+	--tok-function: #7fb0e6;
+	--tok-operator: #c8b6e0;
+	--tok-class: #e6c07b;
+	--tok-property: #83c4d6;
+	--tok-tag: #e0a04c;
+	--tok-deleted: #d98a8a;
+	--tok-inserted: #7ec9a0;
+}
+
+.color-scheme-light {
+	--tok-comment: #6a737d;
+	--tok-punctuation: #4b5563;
+	--tok-keyword: #955a12;
+	--tok-string: #0b7a53;
+	--tok-number: #b02a37;
+	--tok-function: #1f5fa8;
+	--tok-operator: #6b4fa0;
+	--tok-class: #8a6d1a;
+	--tok-property: #0e6b7f;
+	--tok-tag: #955a12;
+	--tok-deleted: #b02a37;
+	--tok-inserted: #0b7a53;
+}
+
+code[class*="language-"],
+pre[class*="language-"] {
+	color: var(--text-color);
+	white-space: pre;
+	word-spacing: normal;
+	word-break: normal;
+	-moz-tab-size: 2;
+	tab-size: 2;
+	hyphens: none;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+	color: var(--tok-comment);
+	font-style: italic;
+}
+
+.token.punctuation {
+	color: var(--tok-punctuation);
+}
+
+.token.property,
+.token.tag,
+.token.symbol,
+.token.constant,
+.token.attr-name {
+	color: var(--tok-property);
+}
+
+.token.boolean,
+.token.number {
+	color: var(--tok-number);
+}
+
+.token.selector,
+.token.string,
+.token.char,
+.token.attr-value,
+.token.builtin,
+.token.inserted {
+	color: var(--tok-string);
+}
+
+.token.operator,
+.token.entity,
+.token.url {
+	color: var(--tok-operator);
+}
+
+.token.atrule,
+.token.keyword {
+	color: var(--tok-keyword);
+}
+
+.token.function,
+.token.class-name {
+	color: var(--tok-function);
+}
+
+.token.class-name {
+	color: var(--tok-class);
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+	color: var(--tok-property);
+}
+
+.token.deleted {
+	color: var(--tok-deleted);
+}
+
+.token.important,
+.token.bold {
+	font-weight: bold;
+}
+
+.token.italic {
+	font-style: italic;
+}

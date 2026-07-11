@@ -1,0 +1,19 @@
+<svg width="128" height="128" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    A zen balancing-stone cairn that doubles as a database. Each flattened,
+    gently-tilted stone is a puck (lit top face over a curved side wall), so it
+    reads as a stacked DB disk seen slightly from the side, even as the cairn leans.
+  -->
+  <g transform="rotate(-3 16 20.6)">
+    <path d="M 6,20.6 L 6,24.4 A 10,2.7 0 0 0 26,24.4 L 26,20.6 A 10,2.7 0 0 1 6,20.6 Z" fill="#a5760f"/>
+    <ellipse cx="16" cy="20.6" rx="10" ry="2.7" fill="#e3b031"/>
+  </g>
+  <g transform="rotate(4 16 11.8)">
+    <path d="M 8.8,11.8 L 8.8,15.2 A 7.2,2.1 0 0 0 23.2,15.2 L 23.2,11.8 A 7.2,2.1 0 0 1 8.8,11.8 Z" fill="#a5760f"/>
+    <ellipse cx="16" cy="11.8" rx="7.2" ry="2.1" fill="#e3b031"/>
+  </g>
+  <g transform="rotate(-5 16 4.6)">
+    <path d="M 11.3,4.6 L 11.3,7.6 A 4.7,1.7 0 0 0 20.7,7.6 L 20.7,4.6 A 4.7,1.7 0 0 1 11.3,4.6 Z" fill="#a5760f"/>
+    <ellipse cx="16" cy="4.6" rx="4.7" ry="1.7" fill="#e3b031"/>
+  </g>
+</svg>

@@ -1,0 +1,22 @@
+{
+	"build": {
+		"minify": false
+	},
+	"directories": {
+		"docs": {
+			"module": "@b9g/filesystem/node-fs",
+			"export": "NodeFSDirectory",
+			"path": "../docs"
+		},
+		"static": {
+			"module": "@b9g/filesystem/node-fs",
+			"export": "NodeFSDirectory",
+			"path": "./static"
+		},
+		"pagefind": {
+			"module": "@b9g/filesystem/node-fs",
+			"export": "NodeFSDirectory",
+			"path": "./dist/public/pagefind"
+		}
+	}
+}
