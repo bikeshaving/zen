@@ -1,9 +1,9 @@
 import {jsx} from "@b9g/crank/standalone";
 
-// Goldenrod pair: the lit top face of each disk and its shadowed side wall.
+// Terracotta pair: the lit top face of each disk and its shadowed side wall.
 // Seen slightly from the side, each stone reads as a stacked database platter.
-const TOP = "#e3b031";
-const SIDE = "#a5760f";
+const TOP = "#e0a074";
+const SIDE = "#9a5c39";
 
 /**
  * The ZenDB mark: a zen balancing-stone cairn that doubles as a database.

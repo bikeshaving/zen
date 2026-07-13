@@ -2,8 +2,8 @@ import type {Context} from "@b9g/crank/standalone";
 
 export type ColorScheme = "dark" | "light";
 
-const BG_DARK = "#0a0e1f";
-const BG_LIGHT = "#e7f4f5";
+const BG_DARK = "#150f0a";
+const BG_LIGHT = "#f5efe8";
 const TEXT_DARK = "#f5f9ff";
 const TEXT_LIGHT = "#0a0e1f";
 

@@ -2,28 +2,28 @@
 @import "./prism-theme.css";
 
 :root {
-	--bg-color: #0a0e1f;
+	--bg-color: #150f0a;
 	--text-color: #f5f9ff;
-	--highlight-color: #daa520;
+	--highlight-color: #d68a5c;
 }
 
 .color-scheme-light {
-	--bg-color: #e7f4f5;
+	--bg-color: #f5efe8;
 	--text-color: #0a0e1f;
-	--highlight-color: #daa520;
+	--highlight-color: #d68a5c;
 }
 
 .blur-background {
 	@supports (backdrop-filter: blur(4px)) {
 		backdrop-filter: blur(8px);
-		background-color: rgba(10, 14, 31, 0.6) !important;
+		background-color: rgba(21, 15, 10, 0.6) !important;
 	}
 }
 
 .color-scheme-light .blur-background {
 	@supports (backdrop-filter: blur(4px)) {
 		backdrop-filter: blur(8px);
-		background-color: rgba(231, 244, 245, 0.6) !important;
+		background-color: rgba(245, 239, 232, 0.6) !important;
 	}
 }
 
@@ -125,7 +125,7 @@ h3 {
 :is(h1, h2, h3, h4, h5, h6) code {
 	color: inherit;
 	font-size: 0.9em;
-	background: rgba(218, 165, 32, 0.12);
+	background: rgba(214, 138, 92, 0.12);
 }
 
 blockquote {
@@ -251,7 +251,7 @@ td {
 }
 
 th {
-	background: rgba(218, 165, 32, 0.1);
+	background: rgba(214, 138, 92, 0.1);
 	color: var(--highlight-color);
 	font-weight: 600;
 }

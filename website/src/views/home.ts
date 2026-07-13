@@ -104,7 +104,7 @@ const glow = css`
 	background:
 		radial-gradient(
 			ellipse 60% 50% at 50% 30%,
-			rgba(218, 165, 32, 0.22),
+			rgba(214, 138, 92, 0.22),
 			transparent 70%
 		);
 	pointer-events: none;
@@ -134,7 +134,7 @@ function Hero() {
 			<div class=${css`
 				color: var(--highlight-color);
 				margin-bottom: 0.5rem;
-				filter: drop-shadow(0 0 24px rgba(218, 165, 32, 0.5));
+				filter: drop-shadow(0 0 24px rgba(214, 138, 92, 0.5));
 			`}>
 				<${Logo} width="clamp(64px, 14vw, 120px)" height="clamp(64px, 14vw, 120px)" />
 			</div>
@@ -151,10 +151,9 @@ function Hero() {
 				font-size: clamp(20px, 4vw, 34px);
 				font-weight: 600;
 				margin: 0.4em 0;
-				max-width: 18ch;
-				line-height: 1.15;
+				line-height: 1.25;
 				${heroTextShadow}
-			`}>Define Zod tables. Write raw SQL. Get typed objects.</p>
+			`}>Define Zod tables.<br />Write raw SQL.<br />Get typed objects.</p>
 			<p class=${css`
 				opacity: 0.75;
 				font-size: clamp(15px, 2.5vw, 18px);
