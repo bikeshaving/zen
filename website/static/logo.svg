@@ -1,19 +1,19 @@
 <svg width="128" height="128" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
   <!--
     A zen balancing-stone cairn that doubles as a database. Each flattened,
-    gently-tilted stone is a puck (lit top face over a curved side wall), so it
-    reads as a stacked DB disk seen slightly from the side, even as the cairn leans.
+    gently-tilted stone is a puck (lit top face over a curved side wall); the
+    stones nestle so each rests on the one below, even as the cairn leans.
   -->
   <g transform="rotate(-3 16 20.6)">
     <path d="M 6,20.6 L 6,24.4 A 10,2.7 0 0 0 26,24.4 L 26,20.6 A 10,2.7 0 0 1 6,20.6 Z" fill="#9a5c39"/>
     <ellipse cx="16" cy="20.6" rx="10" ry="2.7" fill="#e0a074"/>
   </g>
-  <g transform="rotate(4 16 12.6)">
-    <path d="M 8.8,12.6 L 8.8,16 A 7.2,2.1 0 0 0 23.2,16 L 23.2,12.6 A 7.2,2.1 0 0 1 8.8,12.6 Z" fill="#9a5c39"/>
-    <ellipse cx="16" cy="12.6" rx="7.2" ry="2.1" fill="#e0a074"/>
+  <g transform="rotate(4 16 13.3)">
+    <path d="M 8.8,13.3 L 8.8,16.7 A 7.2,2.1 0 0 0 23.2,16.7 L 23.2,13.3 A 7.2,2.1 0 0 1 8.8,13.3 Z" fill="#9a5c39"/>
+    <ellipse cx="16" cy="13.3" rx="7.2" ry="2.1" fill="#e0a074"/>
   </g>
-  <g transform="rotate(-5 16 6)">
-    <path d="M 11.3,6 L 11.3,9 A 4.7,1.7 0 0 0 20.7,9 L 20.7,6 A 4.7,1.7 0 0 1 11.3,6 Z" fill="#9a5c39"/>
-    <ellipse cx="16" cy="6" rx="4.7" ry="1.7" fill="#e0a074"/>
+  <g transform="rotate(-5 16 7.4)">
+    <path d="M 11.3,7.4 L 11.3,10.4 A 4.7,1.7 0 0 0 20.7,10.4 L 20.7,7.4 A 4.7,1.7 0 0 1 11.3,7.4 Z" fill="#9a5c39"/>
+    <ellipse cx="16" cy="7.4" rx="4.7" ry="1.7" fill="#e0a074"/>
   </g>
 </svg>

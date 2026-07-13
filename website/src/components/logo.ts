@@ -62,8 +62,8 @@ export function Logo({
 			xmlns="http://www.w3.org/2000/svg"
 		>
 			<${Stone} cx=${16} cy=${20.6} rx=${10} ry=${2.7} h=${3.8} angle=${-3} />
-			<${Stone} cx=${16} cy=${12.6} rx=${7.2} ry=${2.1} h=${3.4} angle=${4} />
-			<${Stone} cx=${16} cy=${6} rx=${4.7} ry=${1.7} h=${3} angle=${-5} />
+			<${Stone} cx=${16} cy=${13.3} rx=${7.2} ry=${2.1} h=${3.4} angle=${4} />
+			<${Stone} cx=${16} cy=${7.4} rx=${4.7} ry=${1.7} h=${3} angle=${-5} />
 		</svg>
 	`;
 }
