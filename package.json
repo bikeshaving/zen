@@ -24,6 +24,14 @@
       "types": "./dist/src/mysql.d.ts",
       "import": "./dist/src/mysql.js"
     },
+    "./schema": {
+      "types": "./dist/src/schema.d.ts",
+      "import": "./dist/src/schema.js"
+    },
+    "./schema.js": {
+      "types": "./dist/src/schema.d.ts",
+      "import": "./dist/src/schema.js"
+    },
     "./bun.js": {
       "types": "./dist/src/bun.d.ts",
       "import": "./dist/src/bun.js"
