@@ -55,7 +55,7 @@
     "test": "bun test && npm run test:node",
     "test:bun": "bun test",
     "test:node": "node --import tsx --test src/impl/*.node-test.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "lint": "eslint --ext .js,.jsx,.ts,.tsx .",
     "prepublishOnly": "echo 'ERROR: Cannot publish from root directory. Use libuild publish instead.' && exit 1"
   },

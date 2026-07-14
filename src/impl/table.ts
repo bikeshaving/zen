@@ -2850,18 +2850,54 @@ export type FullTableOnly<T> = T extends {meta: {isPartial: true}}
 		: T;
 
 /**
+ * Phantom brand applied by `.db.auto()`, `.db.inserted()` and `.db.upserted()`.
+ *
+ * These methods mean "the value is supplied for you on INSERT", so the field
+ * must not be required in `Insert<T>`. The metadata itself lives in a runtime
+ * side-channel, which the type system cannot see — hence the brand. It rides on
+ * the Zod field type in the table's shape, and because `db` is typed as
+ * `ZodDBMethods<this>`, it survives further chaining in any order
+ * (`.db.auto().db.primary()` and `.db.primary().db.auto()` both keep it).
+ */
+export interface DBInsertOptional {
+	readonly __dbInsertOptional: true;
+}
+
+/** Keys of a table shape whose values are generated on INSERT. */
+type InsertOptionalKeys<Shape extends ZodRawShape> = {
+	[K in keyof Shape]: Shape[K] extends DBInsertOptional ? K : never;
+}[keyof Shape];
+
+/** Make the given keys of `O` optional, leaving the rest required. */
+type OptionalizeKeys<O, K extends PropertyKey> = Omit<O, K> &
+	Partial<Pick<O, Extract<K, keyof O>>>;
+
+/** Flatten an intersection so hovers and errors read as a single object. */
+type Flatten<O> = {[K in keyof O]: O[K]} & {};
+
+/**
  * Infer the insert type (respects defaults and .db.auto() fields).
  * Returns `never` for partial or derived tables to prevent insert at compile time.
  *
+ * Fields marked `.db.auto()`, `.db.inserted()` or `.db.upserted()` are optional,
+ * because the value is generated for you. Everything else stays required.
+ *
  * @example
- * const Users = table("users", {...});
- * type NewUser = Insert<typeof Users>;
+ * const Users = table("users", {
+ *   id: z.string().uuid().db.primary().db.auto(),
+ *   email: z.string().email(),
+ * });
+ * type NewUser = Insert<typeof Users>; // {id?: string; email: string}
  */
 export type Insert<T extends Table<any>> = T extends {meta: {isPartial: true}}
 	? never
 	: T extends {meta: {isDerived: true}}
 		? never
-		: z.input<T["schema"]>;
+		: T extends Table<infer Shape, any, any>
+			? Flatten<
+					OptionalizeKeys<z.input<ZodObject<Shape>>, InsertOptionalKeys<Shape>>
+				>
+			: z.input<T["schema"]>;
 
 /**
  * Infer the update type (all fields optional, excludes primary key and insert-only fields).
@@ -3025,8 +3061,11 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 */
 	inserted(
 		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
-	): Schema;
-	inserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
+	): Schema & DBInsertOptional;
+	inserted(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Schema & DBInsertOptional;
 
 	/**
 	 * Set a value to apply on UPDATE only.
@@ -3059,8 +3098,11 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 */
 	upserted(
 		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
-	): Schema;
-	upserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
+	): Schema & DBInsertOptional;
+	upserted(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Schema & DBInsertOptional;
 
 	/**
 	 * Auto-generate value on insert based on field type.
@@ -3084,7 +3126,7 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 * createdAt: z.date().db.auto()
 	 * // → NOW on insert
 	 */
-	auto(): Schema;
+	auto(): Schema & DBInsertOptional;
 }
 
 declare module "zod" {
