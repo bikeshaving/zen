@@ -78,7 +78,10 @@ export function validateWithStandardSchema<T = unknown>(
 	if (!standard?.validate) {
 		throw new Error(
 			"Schema does not implement Standard Schema (~standard.validate). " +
-				"Ensure you're using Zod v3.23+ or another Standard Schema-compliant library.",
+				"@b9g/zen requires Zod v4, which it declares as a peer dependency. " +
+				"Note that other Standard Schema libraries are not interchangeable here: " +
+				"validation goes through the Standard Schema interface, but table " +
+				"definitions are introspected with Zod-specific checks to generate DDL.",
 		);
 	}
 
