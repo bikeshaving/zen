@@ -1,19 +1,20 @@
 <svg width="128" height="128" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
   <!--
-    A zen balancing-stone cairn that doubles as a database. Each flattened,
-    gently-tilted stone is a puck (lit top face over a curved side wall); the
-    stones nestle so each rests on the one below, even as the cairn leans.
+    A zen balancing-stone cairn that doubles as a database. Each stone is a puck
+    (lit top face over a curved side wall) whose base sits ON the face below it
+    and is set back along the depth axis, so the stack reads as seated, not
+    floating. Symmetric about the vertical axis; the top stone is near level.
   -->
-  <g transform="rotate(-3 16 20.6)">
-    <path d="M 6,20.6 L 6,24.4 A 10,2.7 0 0 0 26,24.4 L 26,20.6 A 10,2.7 0 0 1 6,20.6 Z" fill="#9a5c39"/>
-    <ellipse cx="16" cy="20.6" rx="10" ry="2.7" fill="#e0a074"/>
+  <g transform="rotate(-2 16 24.24)">
+    <path d="M 4.42,19.02 L 4.42,24.24 A 11.58,5.26 0 0 0 27.58,24.24 L 27.58,19.02 A 11.58,5.26 0 0 1 4.42,19.02 Z" fill="#9a5c39"/>
+    <ellipse cx="16" cy="19.02" rx="11.58" ry="5.26" fill="#e0a074"/>
   </g>
-  <g transform="rotate(4 16 13.3)">
-    <path d="M 8.8,13.3 L 8.8,16.7 A 7.2,2.1 0 0 0 23.2,16.7 L 23.2,13.3 A 7.2,2.1 0 0 1 8.8,13.3 Z" fill="#9a5c39"/>
-    <ellipse cx="16" cy="13.3" rx="7.2" ry="2.1" fill="#e0a074"/>
+  <g transform="rotate(1.5 16 16.53)">
+    <path d="M 6.74,11.9 L 6.74,16.53 A 9.26,4.21 0 0 0 25.26,16.53 L 25.26,11.9 A 9.26,4.21 0 0 1 6.74,11.9 Z" fill="#9a5c39"/>
+    <ellipse cx="16" cy="11.9" rx="9.26" ry="4.21" fill="#e0a074"/>
   </g>
-  <g transform="rotate(-5 16 7.4)">
-    <path d="M 11.3,7.4 L 11.3,10.4 A 4.7,1.7 0 0 0 20.7,10.4 L 20.7,7.4 A 4.7,1.7 0 0 1 11.3,7.4 Z" fill="#9a5c39"/>
-    <ellipse cx="16" cy="7.4" rx="4.7" ry="1.7" fill="#e0a074"/>
+  <g transform="rotate(-0.5 16 9.89)">
+    <path d="M 8.59,5.86 L 8.59,9.89 A 7.41,3.36 0 0 0 23.41,9.89 L 23.41,5.86 A 7.41,3.36 0 0 1 8.59,5.86 Z" fill="#9a5c39"/>
+    <ellipse cx="16" cy="5.86" rx="7.41" ry="3.36" fill="#e0a074"/>
   </g>
 </svg>

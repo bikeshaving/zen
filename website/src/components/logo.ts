@@ -7,9 +7,16 @@ const SIDE = "#9a5c39";
 
 /**
  * The ZenDB mark: a zen balancing-stone cairn that doubles as a database.
- * Three flattened, gently-tilted stones are drawn as pucks — a lit elliptical
- * top face over a curved side wall — so each stone reads as a stacked DB disk
- * even though the cairn leans. Balanced in feel, not in geometry.
+ *
+ * Each stone is a puck — a lit elliptical top face over a curved side wall — so
+ * it reads as a stacked DB platter. Geometry is physical, not eyeballed: a
+ * stone's base sits ON the top face below it (never embedded), and each is set
+ * back along the depth axis, which exposes the front crescent of the stone
+ * beneath and is what makes the stack read as seated rather than floating.
+ *
+ * The stack stays symmetric about the vertical axis — no lateral stagger, or it
+ * reads as toppling rather than balanced. The lower stones carry the lean; the
+ * top one is near level, so the cairn resolves into stillness.
  */
 export function Logo({
 	width = "1.9em",
@@ -61,9 +68,9 @@ export function Logo({
 			aria-label="ZenDB"
 			xmlns="http://www.w3.org/2000/svg"
 		>
-			<${Stone} cx=${16} cy=${20.6} rx=${10} ry=${2.7} h=${3.8} angle=${-3} />
-			<${Stone} cx=${16} cy=${13.3} rx=${7.2} ry=${2.1} h=${3.4} angle=${4} />
-			<${Stone} cx=${16} cy=${7.4} rx=${4.7} ry=${1.7} h=${3} angle=${-5} />
+			<${Stone} cx=${16} cy=${19.02} rx=${11.58} ry=${5.26} h=${5.22} angle=${-2} />
+			<${Stone} cx=${16} cy=${11.9} rx=${9.26} ry=${4.21} h=${4.63} angle=${1.5} />
+			<${Stone} cx=${16} cy=${5.86} rx=${7.41} ry=${3.36} h=${4.03} angle=${-0.5} />
 		</svg>
 	`;
 }
