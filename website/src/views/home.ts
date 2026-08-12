@@ -58,7 +58,7 @@ posts[0].author?.name; // "Alice" — resolved from the JOIN, fully typed`;
 const NOT = [
 	{
 		title: "Not a query builder",
-		body: "You write SQL directly with tagged templates — no <code class=\"inline\">.where().orderBy().limit()</code> chains. Helpers handle the tedious parts without hiding or limiting your queries.",
+		body: 'You write SQL directly with tagged templates — no <code class="inline">.where().orderBy().limit()</code> chains. Helpers handle the tedious parts without hiding or limiting your queries.',
 	},
 	{
 		title: "Not an ORM",
@@ -73,19 +73,19 @@ const NOT = [
 const FEATURES = [
 	{
 		title: "Typed CRUD",
-		body: "Insert, update, and query return fully-typed rows inferred straight from your Zod schema — including DB-computed defaults via <code class=\"inline\">RETURNING</code>.",
+		body: 'Insert, update, and query return fully-typed rows inferred straight from your Zod schema — including DB-computed defaults via <code class="inline">RETURNING</code>.',
 	},
 	{
 		title: "Normalized references",
-		body: "<code class=\"inline\">all()</code> deduplicates rows by primary key and resolves <code class=\"inline\">references()</code> into real object graphs — forward and reverse — with zero N+1 queries.",
+		body: '<code class="inline">all()</code> deduplicates rows by primary key and resolves <code class="inline">references()</code> into real object graphs — forward and reverse — with zero N+1 queries.',
 	},
 	{
 		title: "Idempotent migrations",
-		body: "IndexedDB-style <code class=\"inline\">upgradeneeded</code> events with safe, additive-only helpers: <code class=\"inline\">ensureTable</code>, <code class=\"inline\">ensureConstraints</code>, <code class=\"inline\">copyColumn</code>.",
+		body: 'IndexedDB-style <code class="inline">upgradeneeded</code> events with safe, additive-only helpers: <code class="inline">ensureTable</code>, <code class="inline">ensureConstraints</code>, <code class="inline">copyColumn</code>.',
 	},
 	{
 		title: "SQLite · Postgres · MySQL",
-		body: "One template API across three dialects. Drivers build native placeholders (<code class=\"inline\">?</code> / <code class=\"inline\">$1</code>) — no SQL parsing, no lock-in.",
+		body: 'One template API across three dialects. Drivers build native placeholders (<code class="inline">?</code> / <code class="inline">$1</code>) — no SQL parsing, no lock-in.',
 	},
 	{
 		title: "Zod validation on writes",
@@ -101,12 +101,11 @@ const glow = css`
 	position: absolute;
 	inset: 0;
 	z-index: -1;
-	background:
-		radial-gradient(
-			ellipse 60% 50% at 50% 30%,
-			rgba(214, 138, 92, 0.22),
-			transparent 70%
-		);
+	background: radial-gradient(
+		ellipse 60% 50% at 50% 30%,
+		rgba(214, 138, 92, 0.22),
+		transparent 70%
+	);
 	pointer-events: none;
 `;
 
@@ -176,8 +175,13 @@ function Hero() {
 					border-radius: 4px;
 					border: 1px solid var(--text-color);
 					opacity: 0.85;
-					transition: opacity 0.15s, color 0.15s;
-					&:hover { opacity: 1; color: var(--highlight-color); }
+					transition:
+						opacity 0.15s,
+						color 0.15s;
+					&:hover {
+						opacity: 1;
+						color: var(--highlight-color);
+					}
 				}
 			`}>
 				<a href="/guides/getting-started/" class=${css`
@@ -187,13 +191,19 @@ function Hero() {
 						border-color: var(--highlight-color);
 						font-weight: bold;
 						opacity: 1;
-						&:hover { color: var(--bg-color); filter: brightness(1.08); }
+						&:hover {
+							color: var(--bg-color);
+							filter: brightness(1.08);
+						}
 					}
 				`}>Get Started</a>
 				<a href="/guides/api-reference/">API Reference</a>
 				<a href="https://github.com/bikeshaving/zen">GitHub</a>
 			</nav>
-			<div class=${css`width: 100%; max-width: 560px;`}>
+			<div class=${css`
+				width: 100%;
+				max-width: 560px;
+			`}>
 				<${CodeBlock} code="npm install @b9g/zen zod better-sqlite3" lang="bash" />
 			</div>
 		</header>
@@ -219,7 +229,9 @@ function Card({title, body}: {title: string; body: string}) {
 			border-radius: 8px;
 			padding: 1.5rem;
 			background: rgba(128, 128, 128, 0.04);
-			transition: border-color 0.15s, transform 0.15s;
+			transition:
+				border-color 0.15s,
+				transform 0.15s;
 			&:hover {
 				border-color: var(--highlight-color);
 				transform: translateY(-2px);
@@ -292,10 +304,16 @@ export default function Home({url}: ViewProps) {
 				`}>
 					Define tables, open the database, and query. That's the whole loop.
 				</p>
-				<div class=${css`max-width: 820px; margin: 0 auto;`}>
+				<div class=${css`
+					max-width: 820px;
+					margin: 0 auto;
+				`}>
 					<${CodeBlock} code=${QUICK_START} lang="typescript" />
 				</div>
-				<div class=${css`text-align: center; margin-top: 2.5rem;`}>
+				<div class=${css`
+					text-align: center;
+					margin-top: 2.5rem;
+				`}>
 					<a href="/guides/getting-started/" class=${css`
 						display: inline-block;
 						background: var(--highlight-color);
@@ -304,7 +322,9 @@ export default function Home({url}: ViewProps) {
 						text-decoration: none;
 						padding: 0.7em 1.8em;
 						border-radius: 4px;
-						&:hover { filter: brightness(1.08); }
+						&:hover {
+							filter: brightness(1.08);
+						}
 					`}>Read the guides${" →"}</a>
 				</div>
 			</section>

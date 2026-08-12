@@ -3,7 +3,7 @@
  * cards. Optional — the site builds fine without it (it falls back to the SVG
  * favicon and omits og:image). Run with: bun run build-logo
  */
-import {readFileSync, writeFileSync} from "node:fs";
+import {readFileSync} from "node:fs";
 import {join, dirname} from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -30,7 +30,10 @@ async function main() {
 	for (const size of SIZES) {
 		const out = join(staticDir, `logo-${size}.png`);
 		await sharp(svg, {density: 384})
-			.resize(size, size, {fit: "contain", background: {r: 0, g: 0, b: 0, alpha: 0}})
+			.resize(size, size, {
+				fit: "contain",
+				background: {r: 0, g: 0, b: 0, alpha: 0},
+			})
 			.png()
 			.toFile(out);
 		console.log(`wrote logo-${size}.png`);

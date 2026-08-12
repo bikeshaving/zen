@@ -72,7 +72,8 @@ export function* Root(
 							"@type": "SoftwareApplication",
 							name: "ZenDB",
 							url: SITE_URL,
-							description: "Define Zod tables. Write raw SQL. Get typed objects.",
+							description:
+								"Define Zod tables. Write raw SQL. Get typed objects.",
 							applicationCategory: "DeveloperApplication",
 							operatingSystem: "Any",
 							author: {

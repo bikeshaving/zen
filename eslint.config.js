@@ -64,4 +64,13 @@ export default [
 			],
 		},
 	},
+	{
+		// Crank components iterate `this` to re-render. A component that reads no
+		// props writes that as `for ({} of this)` — the empty pattern is the
+		// framework's idiom, not an oversight.
+		files: ["website/**/*.{js,jsx,ts,tsx}"],
+		rules: {
+			"no-empty-pattern": "off",
+		},
+	},
 ];
