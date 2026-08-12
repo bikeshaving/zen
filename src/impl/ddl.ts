@@ -8,6 +8,7 @@
 import {z} from "zod";
 import type {Table, View} from "./table.js";
 import {getTableMeta, getViewMeta} from "./table.js";
+import {TableDefinitionError} from "./errors.js";
 import {
 	ident,
 	makeTemplate,
@@ -185,8 +186,19 @@ function mapZodToSQL(
 		if (hasDefault && defaultValue !== undefined) {
 			sqlDefault = `'${JSON.stringify(defaultValue).replace(/'/g, "''")}'`;
 		}
+	} else if (isForeignZodSchema(core)) {
+		// Every instanceof check above failed, yet this *is* a Zod schema — it just
+		// came from a different copy of Zod than the one zen imported. Falling
+		// through would silently type every column as TEXT, so refuse instead.
+		throw new TableDefinitionError(
+			"Schema came from a different copy of Zod than the one @b9g/zen is using, " +
+				"so its type could not be recognized. This usually means two versions of " +
+				"Zod are installed. zen declares zod as a peer dependency: make sure your " +
+				"project resolves exactly one zod (try `npm ls zod` / `bun pm ls zod`). " +
+				"Without this, every column would silently be created as TEXT.",
+		);
 	} else {
-		// Fallback for unknown types
+		// Fallback for genuinely unhandled (but ours) Zod types, e.g. ZodUnion.
 		sqlType = "TEXT";
 		if (hasDefault && defaultValue !== undefined) {
 			sqlDefault = `'${String(defaultValue).replace(/'/g, "''")}'`;
@@ -194,6 +206,24 @@ function mapZodToSQL(
 	}
 
 	return {sqlType, defaultValue: sqlDefault};
+}
+
+/**
+ * Detect a Zod schema that originates from a *different* Zod instance.
+ *
+ * Zod schemas from our own copy always pass `instanceof z.ZodType` — including
+ * types we don't map explicitly — so those still take the TEXT fallback. A
+ * schema that advertises itself as Zod via Standard Schema but fails the
+ * instanceof check can only be from a duplicate install (the dual package
+ * hazard), which would otherwise make every instanceof in this file fail
+ * silently.
+ */
+function isForeignZodSchema(value: unknown): boolean {
+	if (value instanceof z.ZodType) {
+		return false;
+	}
+	const vendor = (value as any)?.["~standard"]?.vendor;
+	return vendor === "zod";
 }
 
 // ============================================================================

@@ -1,8 +1,13 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "../src/impl/table.js";
-import {generateDDL, type SQLDialect} from "../src/impl/ddl.js";
+import {
+	generateDDL,
+	generateColumnDDL,
+	type SQLDialect,
+} from "../src/impl/ddl.js";
 import {renderDDL} from "../src/impl/sql.js";
+import {TableDefinitionError} from "../src/impl/errors.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -660,6 +665,56 @@ describe("DDL generation", () => {
 			// Should not have DEFAULT clause
 			expect(sqliteDdl).not.toContain("DEFAULT");
 			expect(pgDdl).not.toContain("DEFAULT");
+		});
+	});
+
+	describe("duplicate Zod install (dual package hazard)", () => {
+		// A schema from a *second* copy of Zod fails every `instanceof z.ZodX`
+		// check in ddl.ts. Without a guard it would fall through to the "unknown
+		// type" branch and silently create every column as TEXT.
+		// Mimics a `z.string()` that came from a *different* copy of Zod: it has
+		// Zod's public surface (isOptional/isNullable, no wrapper methods) and
+		// advertises vendor "zod" via Standard Schema, but its prototype chain does
+		// not include *our* z.ZodType — so every `instanceof` in ddl.ts fails.
+		function foreignZodSchema(): z.ZodType {
+			const real = z.string();
+			const foreign: any = {
+				"~standard": (real as any)["~standard"],
+				isOptional: () => false,
+				isNullable: () => false,
+				// no removeDefault/unwrap/innerType, same as a plain ZodString
+			};
+			return foreign as z.ZodType;
+		}
+
+		test("throws instead of silently typing the column TEXT", () => {
+			expect(foreignZodSchema() instanceof z.ZodType).toBe(false);
+
+			expect(() =>
+				generateColumnDDL("email", foreignZodSchema(), {}, "postgresql"),
+			).toThrow(TableDefinitionError);
+		});
+
+		test("error explains the cause rather than the symptom", () => {
+			try {
+				generateColumnDDL("email", foreignZodSchema(), {}, "sqlite");
+				throw new Error("expected generateColumnDDL to throw");
+			} catch (err: any) {
+				expect(err).toBeInstanceOf(TableDefinitionError);
+				expect(err.message).toContain("different copy of Zod");
+				expect(err.message).toContain("peer dependency");
+			}
+		});
+
+		test("a real Zod type we don't map explicitly still falls back to TEXT", () => {
+			// ZodUnion isn't handled by name, but it IS our Zod, so it must keep
+			// taking the TEXT fallback — the guard must not fire here.
+			const union = z.union([z.string(), z.number()]);
+			expect(union instanceof z.ZodType).toBe(true);
+
+			const template = generateColumnDDL("payload", union, {}, "sqlite");
+			const sql = renderDDL(template[0], template.slice(1), "sqlite");
+			expect(sql).toContain("TEXT");
 		});
 	});
 });
