@@ -1,0 +1,18 @@
+{
+  // Typecheck-only config. The base tsconfig drives the build (rootDir: ./src),
+  // so it cannot include files outside src/. This one adds the compile-time
+  // tests in test/types/ — which assert things `bun test` cannot, because
+  // `bun test` does not typecheck.
+  //
+  // test/*.test.ts is deliberately NOT included: those files have pre-existing
+  // type errors, and folding them in would make this check useless.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*", "test/types/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
