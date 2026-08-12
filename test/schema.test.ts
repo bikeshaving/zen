@@ -93,6 +93,7 @@ describe("@b9g/zen/schema", () => {
 			});
 			const row: Row<typeof Users> = {id: "x", email: "a@b.com"};
 			const draft: Insert<typeof Users> = {id: "x", email: "a@b.com"};
+			expect(Users.name).toBe("users");
 			expect(row.id).toBe("x");
 			expect(draft.email).toBe("a@b.com");
 		});
