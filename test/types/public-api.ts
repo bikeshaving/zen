@@ -58,7 +58,7 @@ export async function readmeQuickStart() {
 // Insert: generated fields optional, everything else still required.
 // ============================================================================
 
-const Timestamps = table("timestamps", {
+export const Timestamps = table("timestamps", {
 	id: z.string().uuid().db.primary().db.auto(),
 	title: z.string(),
 	createdAt: z.date().db.inserted(NOW),
@@ -93,7 +93,7 @@ export const unknownField: Insert<typeof Users> = {
 };
 
 // The brand must survive chaining in either order.
-const EitherOrder = table("either_order", {
+export const EitherOrder = table("either_order", {
 	a: z.string().uuid().db.primary().db.auto(),
 	b: z.string().uuid().db.auto().db.unique(),
 	c: z.string(),
